@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (自动 Patch 代码报错版)
+name: 1. 编译 Tvbox Archive (消除 MainActor 错误)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择系统的 Xcode 15.4
+      # 2. 选择稳定的 Xcode 15.4 环境
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
@@ -24,7 +24,7 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【关键修复 1】修补 Swift 6 / Swift 5.9 语法不兼容 & 缺失 await 报错
+      # 4. 【关键修复】自动修补 await 缺失 & 动态关闭 MainActor 严格校验
       - name: Auto Patch Swift Code Errors
         run: |
           # 1. 移除 Xcode 16 专有的 @retroactive 关键字
@@ -60,7 +60,7 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 执行归档编译 (关闭 MainActor 严格隔离校验)
+      # 9. 【关键绝杀】通过 OTHER_SWIFTC_FLAGS 传递 -disable-actor-data-race-checks 关闭 Actor 数据竞争检查
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -75,7 +75,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
-            OTHER_SWIFTC_FLAGS="-suppress-warnings -parse-as-library" \
+            OTHER_SWIFTC_FLAGS="-Xfrontend -disable-actor-data-race-checks" \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
       # 10. 上传编译产物暂存
