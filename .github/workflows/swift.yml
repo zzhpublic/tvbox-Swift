@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (真实下载安装 iOS 18.0 Platform)
+name: 1. 编译 Tvbox Archive (真实在线下载挂载 iOS 18 Platform)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择系统的 Xcode 16.0
+      # 2. 切换到系统自带的 Xcode 16.0
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
@@ -24,22 +24,22 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【核心下载步骤】在 CI 中启动守护进程并精准下载挂载 iOS 18.0
-      - name: Force Download & Install iOS 18.0 Platform
+      # 4. 【核心修复】使用 Xcode 16 标准语法强行触发 iOS Platform 下载与挂载
+      - name: Force Download & Install iOS Platform
         run: |
           echo "==== 1. 初始化 Xcode 运行环境与 CoreSimulator 服务 ===="
           sudo xcodebuild -runFirstLaunch
           sudo killall com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
           
-          echo "==== 2. 发起 iOS 18.0 Platform 的静默下载与挂载 ===="
-          # 开启 Xcode 并发下载通道
+          echo "==== 2. 发起 iOS Platform 的静默下载与挂载 ===="
           export XCODE_BUILD_SYSTEM_SUPPORT_PARALLEL_DOWNLOADS=YES
           
-          # 使用 xcodebuild 精准拉取 iOS 18.0 平台包 (22A3351 为 iOS 18.0 官方 Platform Build ID)
-          sudo xcodebuild -downloadPlatform iOS -buildVersion 22A3351 || sudo xcodebuild -downloadAllPlatforms || true
+          # 正确的标准语法：不加任何不支持的 -buildVersion 参数，开启 quiet 静默拉取
+          sudo xcodebuild -downloadPlatform iOS -quiet || sudo xcodebuild -downloadAllPlatforms || true
           
-          echo "==== 3. 检查系统 Platform 与 SDK 挂载结果 ===="
+          echo "==== 3. 校验 SDK 与 Runtime 挂载状态 ===="
           xcodebuild -showsdks
+          xcrun simctl list runtimes || true
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
