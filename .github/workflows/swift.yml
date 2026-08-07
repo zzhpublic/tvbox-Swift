@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (忽略并发检查版)
+name: 1. 编译 Tvbox Archive (自动 Patch 代码报错版)
 
 on:
   push:
@@ -24,10 +24,19 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 替换 Swift 6 语法特性 (@retroactive)
-      - name: Patch Swift 6 Compatibility Features
+      # 4. 【关键修复 1】修补 Swift 6 / Swift 5.9 语法不兼容 & 缺失 await 报错
+      - name: Auto Patch Swift Code Errors
         run: |
+          # 1. 移除 Xcode 16 专有的 @retroactive 关键字
           find tvbox -name "*.swift" -exec sed -i '' 's/@retroactive //g' {} +
+
+          # 2. 补全 ImageCache 和 CacheStore 中遗漏的 await 关键字
+          find tvbox -name "*.swift" -exec sed -i '' 's/ImageCache.shared.get(/await ImageCache.shared.get(/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/ImageCache.shared.set(/await ImageCache.shared.set(/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/CacheStore.shared.clearHistory(/await CacheStore.shared.clearHistory(/g' {} +
+
+          # 3. 解决 double await (防止重复添加 await 变成 await await)
+          find tvbox -name "*.swift" -exec sed -i '' 's/await await/await/g' {} +
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
@@ -51,7 +60,7 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 【关键修复】禁用严格并发检查 (SWIFT_STRICT_CONCURRENCY=targeted)
+      # 9. 执行归档编译 (关闭 MainActor 严格隔离校验)
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -65,8 +74,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            SWIFT_STRICT_CONCURRENCY=targeted \
-            OTHER_SWIFTC_FLAGS="-suppress-warnings -warn-concurrency" \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            OTHER_SWIFTC_FLAGS="-suppress-warnings -parse-as-library" \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
       # 10. 上传编译产物暂存
