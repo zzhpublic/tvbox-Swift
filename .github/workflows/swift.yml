@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (安装 iOS 18 平台)
+name: 1. 编译 Tvbox Archive (激活系统 SDK)
 
 on:
   push:
@@ -17,17 +17,22 @@ jobs:
       # 2. 切换到系统自带的 Xcode 16.0
       - name: Select Xcode Version
         run: |
-          sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer || true
+          sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
           xcodebuild -version
 
-      # 3. 安装工具链
+      # 3. 安装必备工具
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【关键修复】下载并安装 iOS 18.0 Platform 描述与 SDK
-      - name: Download and Install iOS 18 Platform
+      # 4. 【关键绝杀】启动 CoreSimulator 服务并关联预装的 iOS 18 运行时
+      - name: Setup CoreSimulator & Register iOS SDK
         run: |
-          sudo xcodebuild -downloadPlatform iOS
+          # 启动模拟器守护进程，避免 "Unable to connect to simulator"
+          sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService || true
+          xcrun simctl list runtime > /dev/null
+          
+          # 动态将默认设备挂载为 Generic iOS Device
+          sudo xcodebuild -runFirstLaunch
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
@@ -46,13 +51,14 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 8. 执行归档编译
+      # 8. 执行归档编译 (使用 -sdk iphoneos 强行覆盖)
       - name: Build Xcode Archive
         run: |
           set -o pipefail
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
+            -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
