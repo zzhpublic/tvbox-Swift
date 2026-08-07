@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (真实在线下载挂载 iOS 18 Platform)
+name: 1. 编译 Tvbox Archive (真实下载 + 永久 Cache 版)
 
 on:
   push:
@@ -24,41 +24,60 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【核心修复】使用 Xcode 16 标准语法强行触发 iOS Platform 下载与挂载
-      - name: Force Download & Install iOS Platform
+      # 4. 【核心修复 1】启动并激活 CoreSimulator 守护进程 (解决 Unable to connect to simulator)
+      - name: Boot CoreSimulator Service
         run: |
-          echo "==== 1. 初始化 Xcode 运行环境与 CoreSimulator 服务 ===="
           sudo xcodebuild -runFirstLaunch
-          sudo killall com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-          
-          echo "==== 2. 发起 iOS Platform 的静默下载与挂载 ===="
+          # 显式加载并唤醒 CoreSimulator 守护服务
+          sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.CoreSimulator.CoreSimulatorService.plist 2>/dev/null || true
+          # 唤醒一个默认模拟器，强行初始化 Simulator 运行环境
+          xcrun simctl list devices || true
+
+      # 5. 【核心修复 2】永久缓存已下载的 iOS Platform / Simulator Runtime
+      - name: Cache iOS Platform Runtime
+        id: cache-ios-platform
+        uses: actions/cache@v4
+        with:
+          path: |
+            /Library/Developer/CoreSimulator/Profiles/Runtimes
+            ~/Library/Caches/com.apple.dt.XCode
+          key: ${{ runner.os }}-xcode16-ios-platform-v1
+
+      # 6. 当 Cache 未命中时，才触发真实在线下载
+      - name: Force Download iOS Platform (Only on Cache Miss)
+        if: steps.cache-ios-platform.outputs.cache-hit != 'true'
+        run: |
+          echo "==== 未找到 Cache，开始拉取 iOS Platform ===="
           export XCODE_BUILD_SYSTEM_SUPPORT_PARALLEL_DOWNLOADS=YES
           
-          # 正确的标准语法：不加任何不支持的 -buildVersion 参数，开启 quiet 静默拉取
-          sudo xcodebuild -downloadPlatform iOS -quiet || sudo xcodebuild -downloadAllPlatforms || true
-          
-          echo "==== 3. 校验 SDK 与 Runtime 挂载状态 ===="
+          # 执行标准下载
+          sudo xcodebuild -downloadPlatform iOS -quiet || sudo xcodebuild -downloadAllPlatforms -quiet || true
+
+      # 7. 验证 Platform 挂载状态
+      - name: Verify Platform Installation
+        run: |
+          echo "==== 校验 SDK 与 Runtime 挂载状态 ===="
           xcodebuild -showsdks
           xcrun simctl list runtimes || true
 
-      # 5. 运行 XcodeGen 生成工程
+      # 8. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 6. 创建 macOS entitlements 占位文件
+      # 9. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 7. 解析 SPM 依赖包 (VLCKitSPM)
+      # 10. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 8. 执行归档编译
+      # 11. 执行归档编译
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -75,7 +94,7 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 9. 上传编译产物暂存
+      # 12. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
