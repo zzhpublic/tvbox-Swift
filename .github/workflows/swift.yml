@@ -14,22 +14,26 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 安装 XcodeGen (以防项目需要用它生成 xcodeproj)
+      # 2. 安装 XcodeGen
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      # 3. 【关键修复】动态创建缺少的密钥文件夹及 secrets.sh 占位文件
-      - name: Create Dummy secrets.sh
+      # 3. 创建 IOS-key 文件夹及各种 Dummy 占位文件
+      - name: Create Dummy Secrets & Provision Profile
         run: |
           mkdir -p IOS-key
+          
+          # 生成 dummy secrets.sh
           cat << 'EOF' > IOS-key/secrets.sh
           #!/bin/bash
-          # 占位文件：绕过 package_ios.sh 的文件检查
           echo "Bypassing secrets.sh check for GitHub Actions CI..."
           EOF
           chmod +x IOS-key/secrets.sh
 
-      # 4. 运行项目自带的打包脚本生成 .xcarchive
+          # 生成 dummy cert.mobileprovision 骗过 cp 脚本
+          touch IOS-key/cert.mobileprovision
+
+      # 4. 运行项目打包脚本生成 .xcarchive
       - name: Run Package Script
         run: |
           chmod +x package_ios.sh
