@@ -1,4 +1,4 @@
-name: 编译 TVBox 并直接导出 SideStore IPA
+name: 编译 TVBox 并导出修复网络权限的 SideStore IPA
 
 on:
   push:
@@ -52,11 +52,24 @@ jobs:
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 8. 创建 macOS entitlements 占位文件
-      - name: Fix Missing Entitlements File
+      # 8. 【核心修复 1】生成包含完整网络权限的 Entitlements 文件
+      - name: Inject Network Entitlements
         run: |
           mkdir -p tvbox
-          touch tvbox/tvbox-macOS.entitlements
+          cat <<EOF > tvbox/tvbox-iOS.entitlements
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.network.client</key>
+              <true/>
+              <key>com.apple.security.network.server</key>
+              <true/>
+              <key>get-task-allow</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
 
       # 9. 解析 SPM 依赖包
       - name: Resolve Swift Package Dependencies
@@ -82,18 +95,50 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 11. 【核心新增】直接在当前任务中提取 .app 并打包为 SideStore 专属 .ipa
-      - name: Package IPA for SideStore
+      # 11. 【核心修复 2】注入网络权限 + 补充 ATS 解禁 + 执行 Ad-hoc 伪签名
+      - name: Fix Network Permissions & Package IPA
         run: |
           mkdir -p $RUNNER_TEMP/IPA/Payload
           APP_PATH=$(find $RUNNER_TEMP/TVBox.xcarchive/Products/Applications -name "*.app" | head -n 1)
           echo "找到应用路径: $APP_PATH"
+          
+          # 拷贝 .app 到 Payload 目录
           cp -R "$APP_PATH" $RUNNER_TEMP/IPA/Payload/
+          TARGET_APP="$RUNNER_TEMP/IPA/Payload/$(basename "$APP_PATH")"
+
+          # 11.1 强制写入 ATS (Allow Arbitrary Loads) 与网络权限到 Info.plist
+          PLIST="$TARGET_APP/Info.plist"
+          plutil -insert NSAppTransportSecurity -xml "<dict><key>NSAllowsArbitraryLoads</key><true/></dict>" "$PLIST" 2>/dev/null || \
+          plutil -replace NSAppTransportSecurity -xml "<dict><key>NSAllowsArbitraryLoads</key><true/></dict>" "$PLIST"
+          
+          plutil -replace NSLocalNetworkUsageDescription -string "TVBox 需要访问网络以播放资源" "$PLIST"
+
+          # 11.2 创建伪签名所需的 Entitlements plist
+          cat <<EOF > $RUNNER_TEMP/entitlements.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.network.client</key>
+              <true/>
+              <key>com.apple.security.network.server</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 11.3 强制给 Frameworks 库和主 App 赋予本地 Ad-hoc 签名与网络 Capability
+          if [ -d "$TARGET_APP/Frameworks" ]; then
+            find "$TARGET_APP/Frameworks" -type f \( -name "*.framework" -o -name "*.dylib" \) -exec codesign --force --sign - --timestamp=none {} + 2>/dev/null || true
+          fi
+          codesign --force --sign - --entitlements $RUNNER_TEMP/entitlements.plist --timestamp=none "$TARGET_APP"
+
+          # 11.4 压包为 IPA
           cd $RUNNER_TEMP/IPA
           zip -qr $RUNNER_TEMP/TVBox_SideStore.ipa Payload
-          echo "IPA 打包成功！"
+          echo "==== 修复网络权限后的 IPA 制作完成 ===="
 
-      # 12. 上传最终的 .ipa 文件到 Artifacts
+      # 12. 上传最终的 .ipa 文件
       - name: Upload SideStore IPA Artifact
         uses: actions/upload-artifact@v4
         with:
