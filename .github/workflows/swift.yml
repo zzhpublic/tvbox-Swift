@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (诊断Swift报错版)
+name: 1. 编译 Tvbox Archive (抓取Swift精准报错)
 
 on:
   push:
@@ -14,39 +14,42 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 切换到稳定的 Xcode 15.4 环境
+      # 2. 选择稳定的 Xcode 15.4 环境
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
           xcodebuild -version
 
-      # 3. 安装 XcodeGen 并生成工程
-      - name: Install & Run XcodeGen
-        run: |
-          brew install xcodegen
-          xcodegen generate
+      # 3. 安装 xcbeautify 日志格式化工具与 XcodeGen
+      - name: Install Build Tools
+        run: brew install xcodegen xcbeautify
 
-      # 4. 降级工程格式 (解决 objectVersion 77 问题)
+      # 4. 运行 XcodeGen 生成工程
+      - name: Run XcodeGen
+        run: xcodegen generate
+
+      # 5. 降级工程格式 (解决 objectVersion 77 问题)
       - name: Downgrade xcodeproj Format
         run: |
           find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
 
-      # 5. 创建 macOS entitlements 占位文件
+      # 6. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 6. 解析 SPM 依赖包 (VLCKitSPM)
+      # 7. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 7. 编译 Archive 并抓取具体 Swift 错误日志
+      # 8. 编译 Archive 并在失败时精确打印 Swift 报错行
       - name: Build Xcode Archive
         run: |
+          set -o pipefail
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
@@ -56,10 +59,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            SWIFT_TREAT_WARNINGS_AS_ERRORS=NO
+            COMPILER_INDEX_STORE_ENABLE=NO | xcbeautify
 
-      # 8. 上传编译产物暂存
+      # 9. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
