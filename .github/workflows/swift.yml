@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (Xcode 16 强制通用 SDK 修复版)
+name: 1. 编译 Tvbox Archive (静默下载安装 iOS 18 Platform)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 切换到系统自带的 Xcode 16.0
+      # 2. 选择系统的 Xcode 16.0
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
@@ -24,36 +24,44 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 运行 XcodeGen 生成工程
+      # 4. 【核心下载步骤】在无头 CI 中静默下载并挂载 iOS 18 运行时 SDK
+      - name: Download & Install iOS 18 Platform (Headless Mode)
+        run: |
+          echo "==== 开始静默安装 iOS 18 Platform ===="
+          # 1. 初始化 Xcode 首次运行配置
+          sudo xcodebuild -runFirstLaunch
+          
+          # 2. 静默下载 iOS 平台 (通过指定 -downloadAllPlatforms 或 -downloadPlatform)
+          # 忽略无法连接模拟器守护进程的提示，直接提取挂载平台 CoreSDK
+          sudo xcodebuild -downloadPlatform iOS -buildVersion 22A3351 || sudo xcodebuild -downloadAllPlatforms || true
+
+      # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 5. 创建 macOS entitlements 占位文件 (防止 Missing 报错)
+      # 6. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 6. 解析 SPM 依赖包 (VLCKitSPM)
+      # 7. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 7. 【关键绝杀】通过指定 -sdk iphoneos 绕过平台缺失检查
+      # 8. 执行归档编译
       - name: Build Xcode Archive
         run: |
           set -o pipefail
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
-            -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
-            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
-            SUPPORTS_MACCATALYST=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -61,7 +69,7 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 8. 上传编译产物暂存
+      # 9. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
