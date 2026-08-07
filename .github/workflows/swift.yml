@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (对齐系统 iOS 18.5 现成 Platform)
+name: 1. 编译 Tvbox Archive (彻底粉碎 iOS 18.0 强绑定)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择系统的 Xcode
+      # 2. 选择系统的 Xcode 16.0
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
@@ -24,23 +24,31 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【关键对齐】修改 project.yml 中的版本号为系统现成的 18.5 / 16.0
-      - name: Patch project.yml to match System Runtime
+      # 4. 【绝杀 1】预先清理 project.yml 里的所有强约束
+      - name: Patch project.yml
         run: |
           if [ -f "project.yml" ]; then
-            sed -i '' 's/deploymentTarget: .*/deploymentTarget: "18.5"/g' project.yml
-            sed -i '' 's/iOS: .*/iOS: "18.5"/g' project.yml
+            # 删掉所有可能写死 18.0 的行
+            sed -i '' '/deploymentTarget:/d' project.yml
+            sed -i '' '/sdk:/d' project.yml
+            # 统一注入 iOS 17.0 作为通用兼容基准
+            echo "options:" >> project.yml
+            echo "  deploymentTarget:" >> project.yml
+            echo "    iOS: \"17.0\"" >> project.yml
           fi
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 6. 【扫荡修补】把 pbxproj 中写死的 18.0 全部替换为 18.5
-      - name: Align pbxproj to iOS 18.5
+      # 6. 【绝杀 2】暴力扫荡工程文件，把所有残余的 18.0 / iphoneos18.0 彻底清除
+      - name: Force Purge 18.0 references in pbxproj
         run: |
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18.0;/IPHONEOS_DEPLOYMENT_TARGET = 18.5;/g' {} +
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/iphoneos18.0/iphoneos18.5/g' {} +
+          echo "==== 开始强制粉碎 pbxproj 中的 18.0 标记 ===="
+          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/iphoneos18\.0/iphoneos/g' {} +
+          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/iphoneos18\.[0-9]/iphoneos/g' {} +
+          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18\.0;/IPHONEOS_DEPLOYMENT_TARGET = 17.0;/g' {} +
+          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/SDKROOT = iphoneos18\.0;/SDKROOT = iphoneos;/g' {} +
 
       # 7. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
@@ -55,7 +63,7 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 执行归档编译（瞬间命中 iOS 18.5 现有平台）
+      # 9. 【绝杀 3】通过覆盖环境变量，强制让 xcodebuild 采用通用 SDK
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -65,7 +73,8 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
-            IPHONEOS_DEPLOYMENT_TARGET=18.5 \
+            SDKROOT=iphoneos \
+            IPHONEOS_DEPLOYMENT_TARGET=17.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
