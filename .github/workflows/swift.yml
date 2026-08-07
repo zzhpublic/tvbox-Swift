@@ -24,7 +24,7 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【关键修复】自动修补 await 缺失 & 动态关闭 MainActor 严格校验
+      # 4. 【关键修复】自动补全 MainActor / await / Swift 6 兼容修饰
       - name: Auto Patch Swift Code Errors
         run: |
           # 1. 移除 Xcode 16 专有的 @retroactive 关键字
@@ -34,9 +34,14 @@ jobs:
           find tvbox -name "*.swift" -exec sed -i '' 's/ImageCache.shared.get(/await ImageCache.shared.get(/g' {} +
           find tvbox -name "*.swift" -exec sed -i '' 's/ImageCache.shared.set(/await ImageCache.shared.set(/g' {} +
           find tvbox -name "*.swift" -exec sed -i '' 's/CacheStore.shared.clearHistory(/await CacheStore.shared.clearHistory(/g' {} +
-
-          # 3. 解决 double await (防止重复添加 await 变成 await await)
           find tvbox -name "*.swift" -exec sed -i '' 's/await await/await/g' {} +
+
+          # 3. 【绝杀 MainActor】给访问 sharedController 的视图/方法动态追加 @MainActor 隔离修饰
+          find tvbox -name "*.swift" -exec sed -i '' 's/func releasePlayer/@MainActor func releasePlayer/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/func setupPlayer/@MainActor func setupPlayer/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/func stopPlayer/@MainActor func stopPlayer/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/struct VLCPlayerView/@MainActor struct VLCPlayerView/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/struct PlayerView/@MainActor struct PlayerView/g' {} +
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
@@ -60,7 +65,7 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 【关键绝杀】通过 OTHER_SWIFTC_FLAGS 传递 -disable-actor-data-race-checks 关闭 Actor 数据竞争检查
+      # 9. 执行归档编译
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -75,7 +80,6 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
-            OTHER_SWIFTC_FLAGS="-Xfrontend -disable-actor-data-race-checks" \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
       # 10. 上传编译产物暂存
