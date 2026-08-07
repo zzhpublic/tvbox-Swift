@@ -52,7 +52,7 @@ jobs:
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 8. 【核心修复 1】生成包含完整网络权限的 Entitlements 文件
+      # 8. 生成包含完整网络权限的 Entitlements 文件
       - name: Inject Network Entitlements
         run: |
           mkdir -p tvbox
@@ -95,7 +95,7 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 11. 【核心修复 2】注入网络权限 + 补充 ATS 解禁 + 执行 Ad-hoc 伪签名
+      # 11. 注入网络权限 + 补充 ATS 解禁 + 执行 Ad-hoc 伪签名与打包
       - name: Fix Network Permissions & Package IPA
         run: |
           mkdir -p $RUNNER_TEMP/IPA/Payload
@@ -106,7 +106,7 @@ jobs:
           cp -R "$APP_PATH" $RUNNER_TEMP/IPA/Payload/
           TARGET_APP="$RUNNER_TEMP/IPA/Payload/$(basename "$APP_PATH")"
 
-          # 11.1 强制写入 ATS (Allow Arbitrary Loads) 与网络权限到 Info.plist
+          # 11.1 强制写入 ATS (Allow Arbitrary Loads) 与网络权限描述到 Info.plist
           PLIST="$TARGET_APP/Info.plist"
           plutil -insert NSAppTransportSecurity -xml "<dict><key>NSAllowsArbitraryLoads</key><true/></dict>" "$PLIST" 2>/dev/null || \
           plutil -replace NSAppTransportSecurity -xml "<dict><key>NSAllowsArbitraryLoads</key><true/></dict>" "$PLIST"
@@ -127,7 +127,7 @@ jobs:
           </plist>
           EOF
 
-          # 11.3 强制给 Frameworks 库和主 App 赋予本地 Ad-hoc 签名与网络 Capability
+          # 11.3 强制给 Dynamic Frameworks 库和主 App 赋予本地 Ad-hoc 签名与网络 Capability
           if [ -d "$TARGET_APP/Frameworks" ]; then
             find "$TARGET_APP/Frameworks" -type f \( -name "*.framework" -o -name "*.dylib" \) -exec codesign --force --sign - --timestamp=none {} + 2>/dev/null || true
           fi
@@ -138,7 +138,24 @@ jobs:
           zip -qr $RUNNER_TEMP/TVBox_SideStore.ipa Payload
           echo "==== 修复网络权限后的 IPA 制作完成 ===="
 
-      # 12. 上传最终的 .ipa 文件
+      # 12. 【核心校验步骤】自动检测产物 IPA 的网络权限注入状态
+      - name: Verify IPA Network Permissions
+        run: |
+          APP_PATH=$(find $RUNNER_TEMP/IPA/Payload -name "*.app" | head -n 1)
+          
+          echo "=========================================="
+          echo "🔍 1. 检查 Info.plist 内部网络 ATS 属性:"
+          echo "=========================================="
+          plutil -p "$APP_PATH/Info.plist" | grep -A 4 "NSAppTransportSecurity" || echo "⚠️ 未找到 ATS 配置"
+          
+          echo ""
+          echo "=========================================="
+          echo "🔍 2. 检查二进制 App 的签名 Entitlements:"
+          echo "=========================================="
+          codesign -d --entitlements :- "$APP_PATH" || echo "⚠️ 签名二进制没有读取到 Entitlements"
+          echo "=========================================="
+
+      # 13. 上传最终的 .ipa 文件
       - name: Upload SideStore IPA Artifact
         uses: actions/upload-artifact@v4
         with:
