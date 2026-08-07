@@ -3,7 +3,7 @@ name: 1. 编译 Tvbox Archive (未签名)
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch: # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   build-archive:
@@ -14,32 +14,38 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 安装 XcodeGen
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      # 2. 切换到支持更高版本格式的 Xcode
+      - name: Select Xcode Version
+        run: |
+          sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
+          xcodebuild -version
 
-      # 3. 创建 IOS-key 文件夹及各种 Dummy 占位文件
+      # 3. 安装 XcodeGen 并重新生成工程
+      - name: Install & Run XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen generate # 重新生成兼容当前 Xcode 的 pbxproj
+
+      # 4. 创建 Dummy 密钥和描述文件 (欺骗 package_ios.sh 的检查)
       - name: Create Dummy Secrets & Provision Profile
         run: |
           mkdir -p IOS-key
           
-          # 生成 dummy secrets.sh
           cat << 'EOF' > IOS-key/secrets.sh
           #!/bin/bash
-          echo "Bypassing secrets.sh check for GitHub Actions CI..."
+          echo "Bypassing secrets.sh check..."
           EOF
           chmod +x IOS-key/secrets.sh
 
-          # 生成 dummy cert.mobileprovision 骗过 cp 脚本
           touch IOS-key/cert.mobileprovision
 
-      # 4. 运行项目打包脚本生成 .xcarchive
+      # 5. 运行打包脚本
       - name: Run Package Script
         run: |
           chmod +x package_ios.sh
           ./package_ios.sh
 
-      # 5. 提取生成的 .xcarchive 并打包上传暂存
+      # 6. 上传 xcarchive 产物
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -48,4 +54,4 @@ jobs:
             *.xcarchive
             build/*.xcarchive
             ~/Library/Developer/Xcode/Archives/*/*.xcarchive
-          retention-days: 1 # 暂存 1 天
+          retention-days: 1
