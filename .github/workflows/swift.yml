@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (消除 MainActor 错误)
+name: 1. 编译 Tvbox Archive (Swift 5 兼容模式)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择稳定的 Xcode 15.4 环境
+      # 2. 选择系统的 Xcode 15.4
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
@@ -24,7 +24,7 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【关键修复】自动补全 MainActor / await / Swift 6 兼容修饰
+      # 4. 【关键修复 1】修正 Swift 语法 Patch 脚本 (正确放置 @MainActor 和 await)
       - name: Auto Patch Swift Code Errors
         run: |
           # 1. 移除 Xcode 16 专有的 @retroactive 关键字
@@ -36,12 +36,10 @@ jobs:
           find tvbox -name "*.swift" -exec sed -i '' 's/CacheStore.shared.clearHistory(/await CacheStore.shared.clearHistory(/g' {} +
           find tvbox -name "*.swift" -exec sed -i '' 's/await await/await/g' {} +
 
-          # 3. 【绝杀 MainActor】给访问 sharedController 的视图/方法动态追加 @MainActor 隔离修饰
+          # 3. 正确将 @MainActor 加在声明的最开头 (放在 private/fileprivate 前面)
+          find tvbox -name "*.swift" -exec sed -i '' 's/private func setupPlayer/@MainActor private func setupPlayer/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/private func releasePlayer/@MainActor private func releasePlayer/g' {} +
           find tvbox -name "*.swift" -exec sed -i '' 's/func releasePlayer/@MainActor func releasePlayer/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/func setupPlayer/@MainActor func setupPlayer/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/func stopPlayer/@MainActor func stopPlayer/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/struct VLCPlayerView/@MainActor struct VLCPlayerView/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/struct PlayerView/@MainActor struct PlayerView/g' {} +
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
@@ -65,7 +63,7 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 执行归档编译
+      # 9. 【关键修复 2】强制编译器降级为 Swift 5 兼容模式 (-swift-version 5)
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -79,7 +77,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            SWIFT_STRICT_CONCURRENCY=minimal \
+            SWIFT_VERSION=5.0 \
+            SWIFT_STRICT_CONCURRENCY=targeted \
+            OTHER_SWIFTC_FLAGS="-swift-version 5 -suppress-warnings" \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
       # 10. 上传编译产物暂存
