@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (自动补全 SDK)
+name: 1. 编译 Tvbox Archive (降级 SDK 策略)
 
 on:
   push:
@@ -10,43 +10,50 @@ jobs:
     runs-on: macos-15
 
     steps:
-      # 1. 检出代码
+      # 1. 检出仓库代码
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择 Xcode 16
+      # 2. 选择系统的 Xcode 16
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer || true
           xcodebuild -version
 
-      # 3. 安装必备工具
+      # 3. 安装工具
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【关键绝杀】补全缺失的 iOS 18 Platform SDK
-      - name: Download & Install iOS Platform
+      # 4. 【关键修复 1】强制将 project.yml 中的 deploymentTarget 降级为 15.0
+      - name: Downgrade Deployment Target in project.yml
         run: |
-          sudo xcodebuild -downloadPlatform iOS || true
+          sed -i '' 's/deploymentTarget: "17.0"/deploymentTarget: "15.0"/g' project.yml
+          sed -i '' 's/deploymentTarget: "18.0"/deploymentTarget: "15.0"/g' project.yml
 
-      # 5. 运行 XcodeGen
+      # 5. 重新生成 .xcodeproj 工程文件
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 6. 创建 entitlements 占位文件
+      # 6. 【关键修复 2】修改工程属性，将 IPHONEOS_DEPLOYMENT_TARGET 统一改写为 15.0
+      - name: Force Patch pbxproj Deployment Target
+        run: |
+          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 17.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' {} +
+          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' {} +
+
+      # 7. 创建 macOS entitlements 占位文件 (防止 Missing 报错)
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 7. 解析 SPM 依赖
+      # 8. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 8. 执行归档
+      # 9. 执行归档编译
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -56,6 +63,7 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -63,7 +71,7 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=minimal \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 9. 上传产物
+      # 10. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
