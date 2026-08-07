@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (使用稳定支持的 SDK 环境)
+name: 1. 编译 Tvbox Archive (忽略并发检查版)
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
 
 jobs:
   build-archive:
-    # 切换到具备完整 iOS SDK 的 macos-14 镜像
     runs-on: macos-14
 
     steps:
@@ -25,7 +24,7 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 替换 Swift 语法特性 (把 Xcode 16 专属的 @retroactive 替换掉)
+      # 4. 替换 Swift 6 语法特性 (@retroactive)
       - name: Patch Swift 6 Compatibility Features
         run: |
           find tvbox -name "*.swift" -exec sed -i '' 's/@retroactive //g' {} +
@@ -52,7 +51,7 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 执行归档编译
+      # 9. 【关键修复】禁用严格并发检查 (SWIFT_STRICT_CONCURRENCY=targeted)
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -66,7 +65,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            SWIFT_STRICT_CONCURRENCY=minimal \
+            SWIFT_STRICT_CONCURRENCY=targeted \
+            OTHER_SWIFTC_FLAGS="-suppress-warnings -warn-concurrency" \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
       # 10. 上传编译产物暂存
