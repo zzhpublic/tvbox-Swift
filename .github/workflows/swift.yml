@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (Xcode 16 原生版)
+name: 1. 编译 Tvbox Archive (Xcode 16 强制通用 SDK 修复版)
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
 
 jobs:
   build-archive:
-    # 切换回支持 Xcode 16 的 macos-15 镜像
     runs-on: macos-15
 
     steps:
@@ -15,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 显式切换到系统的 Xcode 16.0
+      # 2. 切换到系统自带的 Xcode 16.0
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
@@ -25,40 +24,36 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【核心点】修复 Xcode 16 CI 环境缺少 iOS 18 Platform SDK 描述文件的问题
-      - name: Prepare Xcode 16 iOS SDK Platform
-        run: |
-          sudo xcodebuild -runFirstLaunch || true
-          # 仅下载 iOS Platform SDK 描述（非完整模拟器），避开 Unable to connect to simulator 报错
-          sudo xcodebuild -downloadPlatform iOS -buildVersion 22A3351 || true
-
-      # 5. 运行 XcodeGen 生成 Xcode 16 项目文件
+      # 4. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 6. 创建 macOS entitlements 占位文件
+      # 5. 创建 macOS entitlements 占位文件 (防止 Missing 报错)
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 7. 解析 SPM 依赖包 (VLCKitSPM)
+      # 6. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 8. 执行归档编译
+      # 7. 【关键绝杀】通过指定 -sdk iphoneos 绕过平台缺失检查
       - name: Build Xcode Archive
         run: |
           set -o pipefail
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
+            -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            SUPPORTS_MACCATALYST=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -66,7 +61,7 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 9. 上传编译产物暂存
+      # 8. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
