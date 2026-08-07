@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (精准 MainActor 修补版)
+name: 1. 编译 Tvbox Archive (干净构建版)
 
 on:
   push:
@@ -24,50 +24,29 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【核心修复】精准修复语法顺序与 MainActor 隔离
-      - name: Auto Patch Swift Code Errors
-        run: |
-          # 1. 移除 Xcode 16 专有的 @retroactive 关键字
-          find tvbox -name "*.swift" -exec sed -i '' 's/@retroactive //g' {} +
-
-          # 2. 补全 ImageCache 和 CacheStore 中遗漏的 await 关键字
-          find tvbox -name "*.swift" -exec sed -i '' 's/ImageCache.shared.get(/await ImageCache.shared.get(/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/ImageCache.shared.set(/await ImageCache.shared.set(/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/CacheStore.shared.clearHistory(/await CacheStore.shared.clearHistory(/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/await await/await/g' {} +
-
-          # 3. 【精准修复】直接将包含 VLC/Player 的 View 结构体整体修饰为 @MainActor
-          find tvbox -name "*.swift" -exec sed -i '' 's/struct VLCPlayerView/@MainActor struct VLCPlayerView/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/struct PlayerView/@MainActor struct PlayerView/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/class Coordinator/@MainActor class Coordinator/g' {} +
-
-          # 4. 精准将 @MainActor 放置在 private/fileprivate 访问修饰符的最前面
-          find tvbox -name "*.swift" -exec sed -i '' 's/private func cleanupPlayer/@MainActor private func cleanupPlayer/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/fileprivate func cleanupPlayer/@MainActor fileprivate func cleanupPlayer/g' {} +
-
-      # 5. 运行 XcodeGen 生成工程
+      # 4. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 6. 将工程格式降低到 60 (解决 ObjectVersion 77 报错)
+      # 5. 将工程格式降低到 60 (解决 Xcode 16 ObjectVersion 77 兼容问题)
       - name: Downgrade Xcode Project Format
         run: |
           find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
 
-      # 7. 创建 macOS entitlements 占位文件
+      # 6. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 8. 解析 SPM 依赖包 (VLCKitSPM)
+      # 7. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 执行归档编译
+      # 8. 执行归档编译
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -81,10 +60,10 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            SWIFT_STRICT_CONCURRENCY=targeted \
+            SWIFT_STRICT_CONCURRENCY=minimal \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 10. 上传编译产物暂存
+      # 9. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
