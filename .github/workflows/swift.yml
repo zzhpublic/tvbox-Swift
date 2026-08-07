@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (彻底抹除 iOS 18 强绑定)
+name: 1. 编译 Tvbox Archive (Cache 极速预下载 iOS 18 Runtime)
 
 on:
   push:
@@ -22,52 +22,88 @@ jobs:
 
       # 3. 安装必备工具
       - name: Install Build Tools
-        run: brew install xcodegen xcbeautify
+        run: brew install xcodegen xcbeautify aria2
 
-      # 4. 【关键修复 1】修正 project.yml 配置，清空强绑定的 SDK 版本
-      - name: Patch project.yml
+      # 4. 初始化 Xcode 首次运行环境
+      - name: Setup Xcode First Launch
         run: |
-          if [ -f "project.yml" ]; then
-            sed -i '' 's/sdk: iphoneos18.0/sdk: iphoneos/g' project.yml
-            sed -i '' 's/deploymentTarget: .*/deploymentTarget: "16.0"/g' project.yml
-          fi
+          sudo xcodebuild -runFirstLaunch
 
-      # 5. 运行 XcodeGen 生成工程
+      # 5. 【核心步骤 1】配置 GitHub Actions 缓存（缓存下载落盘的 DMG 文件与解压目录）
+      - name: Cache iOS 18 Platform Runtime DMG
+        id: cache-ios-runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/iOS_18_Runtime
+            /Library/Developer/CoreSimulator/Profiles/Runtimes
+          key: ${{ runner.os }}-xcode16-ios18-runtime-cache-v1
+
+      # 6. 【核心步骤 2】缓存未命中时：用多线程极速下载到 Cache 目录
+      - name: Fast Download iOS 18 Runtime to Cache Directory
+        if: steps.cache-ios-runtime.outputs.cache-hit != 'true'
+        run: |
+          echo "==== 未在 Cache 中找到 Runtime，发起极速下载 ===="
+          # 创建 Cache 目标文件夹
+          mkdir -p ~/Library/Caches/iOS_18_Runtime
+          
+          # 使用 xcodebuild 极速触发下载落盘至系统 Cache 目录
+          export XCODE_BUILD_SYSTEM_SUPPORT_PARALLEL_DOWNLOADS=YES
+          sudo xcodebuild -downloadPlatform iOS -quiet || true
+
+      # 7. 【核心步骤 3】挂载/同步 Cache 里的 Runtime 到 CoreSimulator
+      - name: Mount & Register iOS 18 Runtime
+        run: |
+          echo "==== 开始激活并挂载 Runtime ===="
+          # 确保目标 Runtime 目录权限正确
+          sudo mkdir -p /Library/Developer/CoreSimulator/Profiles/Runtimes
+          
+          # 扫描并强制将 Xcode 缓存中的 .simruntime 链接/装载到系统 Runtime 目录
+          sudo xcrun simctl runtime add ~/Library/Caches/com.apple.dt.XCode/Downloads/*.dmg || true
+          
+          # 尝试刷新 simctl 运行时注册
+          xcrun simctl list runtimes || true
+
+      # 8. 【验证步骤】实时查看下载与缓存生效状态
+      - name: Verify Download and Cache Result
+        run: |
+          echo "================ [1] 检查已挂载的 SDK ================"
+          xcodebuild -showsdks
+
+          echo "================ [2] 检查 CoreSimulator 运行时状态 ================"
+          xcrun simctl list runtimes
+
+          echo "================ [3] 检查 Cache 目录文件大小 ================"
+          du -sh ~/Library/Caches/com.apple.dt.XCode/ 2>/dev/null || true
+          du -sh /Library/Developer/CoreSimulator/Profiles/Runtimes/ 2>/dev/null || true
+
+      # 9. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 6. 【关键修复 2】直接扫荡 pbxproj，把工程文件里写死的 iphoneos18.0 全部抹平为 iphoneos
-      - name: Force Sanitize Xcode Project SDKROOT
-        run: |
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/iphoneos18.0/iphoneos/g' {} +
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18.0;/IPHONEOS_DEPLOYMENT_TARGET = 16.0;/g' {} +
-
-      # 7. 创建 macOS entitlements 占位文件
+      # 10. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 8. 解析 SPM 依赖包 (VLCKitSPM)
+      # 11. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 执行归档编译
+      # 12. 执行归档编译
       - name: Build Xcode Archive
         run: |
           set -o pipefail
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
-            -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
-            SDKROOT=iphoneos \
-            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -75,7 +111,7 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 10. 上传编译产物暂存
+      # 13. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
