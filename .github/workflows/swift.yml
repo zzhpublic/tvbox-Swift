@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (Xcode 16 自动匹配 iOS SDK)
+name: 1. 编译 Tvbox Archive (Xcode 16 稳定终极版)
 
 on:
   push:
@@ -24,12 +24,10 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【核心修复】不写死版本号，让 xcodebuild 自动匹配当前 SDK 所需的 iOS 平台
-      - name: Install Matching iOS Platform
+      # 4. 初始化 Xcode 首次运行环境
+      - name: Setup Xcode First Launch
         run: |
           sudo xcodebuild -runFirstLaunch
-          # 动态匹配并下载当前 Xcode 16 镜像所需的 iOS 平台描述包
-          sudo xcodebuild -downloadPlatform iOS || true
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
@@ -48,16 +46,19 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 8. 执行归档编译
+      # 8. 【核心修复】强制指定 iphoneos SDK 与 15.0 部署目标，规避 iOS 18 Runtime 拦截
       - name: Build Xcode Archive
         run: |
           set -o pipefail
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
-            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS,name=Any iOS Device" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            SUPPORTS_MACCATALYST=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
