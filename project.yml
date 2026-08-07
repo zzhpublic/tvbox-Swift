@@ -28,6 +28,21 @@ targets:
       - path: tvbox
         excludes:
           - Info.plist
+    info:
+      path: tvbox/Info.plist
+      properties:
+        # 1. 允许加载 HTTP 协议链接（解除苹果 ATS 安全限制，TVBox 绝大多数接口和视频源都是 HTTP）
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+
+        # 2. 声明本地网络访问权限（TVBox 局域网搜寻/投屏必备，触发系统网络授权弹窗）
+        NSLocalNetworkUsageDescription: "TVBox 需要访问本地网络以搜索局域网设备和加载播放资源。"
+
+        # 3. 声明 Bonjour 局域网服务（防止 iOS 14+ 隐式屏蔽本地网络请求）
+        NSBonjourServices:
+          - "_http._tcp"
+          - "_airplay._tcp"
+          
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: xyz.appinstall.nov.carbon.lam
