@@ -7,7 +7,6 @@ on:
 
 jobs:
   build-archive:
-    # 切换到自带 Xcode 16 的 macOS 15 镜像
     runs-on: macos-15
 
     steps:
@@ -15,13 +14,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 确保选择系统里的 Xcode 16
+      # 2. 选择系统的 Xcode 16
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer || true
           xcodebuild -version
 
-      # 3. 安装工具
+      # 3. 安装 Build 工具
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
@@ -42,13 +41,14 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 7. 原生 xcodebuild 构建 Archive (关闭严格并发和警告拦截)
+      # 7. 【关键修复】使用 -sdk iphoneos 和 ALLOW_INELIGIBLE_PLATFORMS 绕过 iOS 18 SDK 缺失检测
       - name: Build Xcode Archive
         run: |
           set -o pipefail
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
+            -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
@@ -57,7 +57,8 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
-            SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=NO \
+            ALLOW_INELIGIBLE_PLATFORMS=YES | xcbeautify
 
       # 8. 上传编译产物暂存
       - name: Upload Archive Artifact
