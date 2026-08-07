@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (干净构建版)
+name: 1. 编译 Tvbox Archive (Xcode 16 原生版)
 
 on:
   push:
@@ -7,31 +7,34 @@ on:
 
 jobs:
   build-archive:
-    runs-on: macos-14
+    # 切换回支持 Xcode 16 的 macos-15 镜像
+    runs-on: macos-15
 
     steps:
       # 1. 检出仓库代码
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择稳定的 Xcode 15.4 环境
+      # 2. 显式切换到系统的 Xcode 16.0
       - name: Select Xcode Version
         run: |
-          sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
+          sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
           xcodebuild -version
 
       # 3. 安装必备工具
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 运行 XcodeGen 生成工程
+      # 4. 【核心点】修复 Xcode 16 CI 环境缺少 iOS 18 Platform SDK 描述文件的问题
+      - name: Prepare Xcode 16 iOS SDK Platform
+        run: |
+          sudo xcodebuild -runFirstLaunch || true
+          # 仅下载 iOS Platform SDK 描述（非完整模拟器），避开 Unable to connect to simulator 报错
+          sudo xcodebuild -downloadPlatform iOS -buildVersion 22A3351 || true
+
+      # 5. 运行 XcodeGen 生成 Xcode 16 项目文件
       - name: Run XcodeGen
         run: xcodegen generate
-
-      # 5. 将工程格式降低到 60 (解决 Xcode 16 ObjectVersion 77 兼容问题)
-      - name: Downgrade Xcode Project Format
-        run: |
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
 
       # 6. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
@@ -60,7 +63,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            SWIFT_STRICT_CONCURRENCY=minimal \
+            SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
       # 9. 上传编译产物暂存
