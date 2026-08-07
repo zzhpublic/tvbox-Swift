@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (静默下载安装 iOS 18 Platform)
+name: 1. 编译 Tvbox Archive (Xcode 16 自动匹配 iOS SDK)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择系统的 Xcode 16.0
+      # 2. 切换到系统自带的 Xcode 16.0
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
@@ -24,16 +24,12 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【核心下载步骤】在无头 CI 中静默下载并挂载 iOS 18 运行时 SDK
-      - name: Download & Install iOS 18 Platform (Headless Mode)
+      # 4. 【核心修复】不写死版本号，让 xcodebuild 自动匹配当前 SDK 所需的 iOS 平台
+      - name: Install Matching iOS Platform
         run: |
-          echo "==== 开始静默安装 iOS 18 Platform ===="
-          # 1. 初始化 Xcode 首次运行配置
           sudo xcodebuild -runFirstLaunch
-          
-          # 2. 静默下载 iOS 平台 (通过指定 -downloadAllPlatforms 或 -downloadPlatform)
-          # 忽略无法连接模拟器守护进程的提示，直接提取挂载平台 CoreSDK
-          sudo xcodebuild -downloadPlatform iOS -buildVersion 22A3351 || sudo xcodebuild -downloadAllPlatforms || true
+          # 动态匹配并下载当前 Xcode 16 镜像所需的 iOS 平台描述包
+          sudo xcodebuild -downloadPlatform iOS || true
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
