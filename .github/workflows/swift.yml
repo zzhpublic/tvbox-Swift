@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (未签名)
+name: 1. 编译 Tvbox Archive (自动拉取依赖)
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-archive:
-    # 降回使用最稳妥的 macos-14 环境 (内置已安装齐全的 iOS SDK)
+    # 使用 macOS 14 镜像 (稳定内置 iOS 17 SDK & Xcode 15.4)
     runs-on: macos-14
 
     steps:
@@ -15,42 +15,49 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择稳定的 Xcode 15.4 环境
+      # 2. 切换到稳定的 Xcode 15.4 环境
       - name: Select Xcode Version
         run: |
           sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
           xcodebuild -version
 
-      # 3. 安装 XcodeGen 并降级 project.pbxproj 的格式（解决 ObjectVersion 77 问题）
+      # 3. 安装 XcodeGen 并根据 project.yml 重新生成 .xcodeproj
       - name: Install & Run XcodeGen
         run: |
           brew install xcodegen
-          
-          if [ -f "project.yml" ]; then
-            xcodegen generate
-          fi
+          xcodegen generate
 
-          # 强制将 77 格式降级为 60，避免 Xcode 15 拒读
-          find . -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
+      # 4. 【补全缺失文件】创建 tvbox-macOS.entitlements 占位文件防止生成/编译失败
+      - name: Fix Missing Entitlements File
+        run: |
+          mkdir -p tvbox
+          touch tvbox/tvbox-macOS.entitlements
 
-      # 4. 【关键步骤】直接用原生 xcodebuild 打包，完全绕过 package_ios.sh
-      - name: Build Archive Directly
+      # 5. 【关键步骤：解决依赖缺失】预解析并下载 SPM 依赖包 (VLCKitSPM)
+      - name: Resolve Swift Package Dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project tvbox.xcodeproj \
+            -scheme "tvbox"
+
+      # 6. 原生 xcodebuild 构建 Release 归档包 (完全禁用签名要求)
+      - name: Build Xcode Archive
         run: |
           xcodebuild archive \
             -project tvbox.xcodeproj \
             -scheme "tvbox" \
             -destination "generic/platform=iOS" \
-            -archivePath $RUNNER_TEMP/tvbox.xcarchive \
+            -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO
 
-      # 5. 上传生成的 tvbox.xcarchive 归档文件
+      # 7. 上传编译产物暂存（供签名 Workflow 下载）
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         with:
           name: tvbox-xcarchive
-          path: ${{ runner.temp }}/tvbox.xcarchive
+          path: ${{ runner.temp }}/TVBox.xcarchive
           retention-days: 1
