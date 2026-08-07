@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (彻底粉碎 iOS 18.0 强绑定)
+name: 1. 编译 Tvbox Archive (真实下载安装 iOS 18.0 Platform)
 
 on:
   push:
@@ -24,46 +24,41 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【绝杀 1】预先清理 project.yml 里的所有强约束
-      - name: Patch project.yml
+      # 4. 【核心下载步骤】在 CI 中启动守护进程并精准下载挂载 iOS 18.0
+      - name: Force Download & Install iOS 18.0 Platform
         run: |
-          if [ -f "project.yml" ]; then
-            # 删掉所有可能写死 18.0 的行
-            sed -i '' '/deploymentTarget:/d' project.yml
-            sed -i '' '/sdk:/d' project.yml
-            # 统一注入 iOS 17.0 作为通用兼容基准
-            echo "options:" >> project.yml
-            echo "  deploymentTarget:" >> project.yml
-            echo "    iOS: \"17.0\"" >> project.yml
-          fi
+          echo "==== 1. 初始化 Xcode 运行环境与 CoreSimulator 服务 ===="
+          sudo xcodebuild -runFirstLaunch
+          sudo killall com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+          
+          echo "==== 2. 发起 iOS 18.0 Platform 的静默下载与挂载 ===="
+          # 开启 Xcode 并发下载通道
+          export XCODE_BUILD_SYSTEM_SUPPORT_PARALLEL_DOWNLOADS=YES
+          
+          # 使用 xcodebuild 精准拉取 iOS 18.0 平台包 (22A3351 为 iOS 18.0 官方 Platform Build ID)
+          sudo xcodebuild -downloadPlatform iOS -buildVersion 22A3351 || sudo xcodebuild -downloadAllPlatforms || true
+          
+          echo "==== 3. 检查系统 Platform 与 SDK 挂载结果 ===="
+          xcodebuild -showsdks
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 6. 【绝杀 2】暴力扫荡工程文件，把所有残余的 18.0 / iphoneos18.0 彻底清除
-      - name: Force Purge 18.0 references in pbxproj
-        run: |
-          echo "==== 开始强制粉碎 pbxproj 中的 18.0 标记 ===="
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/iphoneos18\.0/iphoneos/g' {} +
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/iphoneos18\.[0-9]/iphoneos/g' {} +
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18\.0;/IPHONEOS_DEPLOYMENT_TARGET = 17.0;/g' {} +
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/SDKROOT = iphoneos18\.0;/SDKROOT = iphoneos;/g' {} +
-
-      # 7. 创建 macOS entitlements 占位文件
+      # 6. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 8. 解析 SPM 依赖包 (VLCKitSPM)
+      # 7. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 9. 【绝杀 3】通过覆盖环境变量，强制让 xcodebuild 采用通用 SDK
+      # 8. 执行归档编译
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -73,8 +68,6 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath $RUNNER_TEMP/TVBox.xcarchive \
             -configuration Release \
-            SDKROOT=iphoneos \
-            IPHONEOS_DEPLOYMENT_TARGET=17.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -82,7 +75,7 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=targeted \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 10. 上传编译产物暂存
+      # 9. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
