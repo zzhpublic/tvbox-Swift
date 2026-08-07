@@ -14,24 +14,34 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 安装 XcodeGen（如果项目用到了 xcodeproj 生成）
+      # 2. 安装 XcodeGen (以防项目需要用它生成 xcodeproj)
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      # 3. 运行项目自带的打包脚本生成 .xcarchive
+      # 3. 【关键修复】动态创建缺少的密钥文件夹及 secrets.sh 占位文件
+      - name: Create Dummy secrets.sh
+        run: |
+          mkdir -p IOS-key
+          cat << 'EOF' > IOS-key/secrets.sh
+          #!/bin/bash
+          # 占位文件：绕过 package_ios.sh 的文件检查
+          echo "Bypassing secrets.sh check for GitHub Actions CI..."
+          EOF
+          chmod +x IOS-key/secrets.sh
+
+      # 4. 运行项目自带的打包脚本生成 .xcarchive
       - name: Run Package Script
         run: |
           chmod +x package_ios.sh
           ./package_ios.sh
 
-      # 4. 提取生成的 .xcarchive 并打包上传暂存
+      # 5. 提取生成的 .xcarchive 并打包上传暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         with:
           name: tvbox-xcarchive
-          # 假设脚本在根目录或 build 目录下生成了 xcarchive
           path: |
             *.xcarchive
             build/*.xcarchive
+            ~/Library/Developer/Xcode/Archives/*/*.xcarchive
           retention-days: 1 # 暂存 1 天
-
