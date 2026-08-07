@@ -7,26 +7,34 @@ on:
 
 jobs:
   build-archive:
-    runs-on: macos-14
+    # 切换到支持 Xcode 16+ 的 macos-15 镜像
+    runs-on: macos-15
 
     steps:
       # 1. 检出仓库代码
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 切换到支持更高版本格式的 Xcode
+      # 2. 确保使用 Xcode 16
       - name: Select Xcode Version
         run: |
-          sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
+          sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer || true
           xcodebuild -version
 
-      # 3. 安装 XcodeGen 并重新生成工程
+      # 3. 安装 XcodeGen 并降级转换 pbxproj 格式
       - name: Install & Run XcodeGen
         run: |
           brew install xcodegen
-          xcodegen generate # 重新生成兼容当前 Xcode 的 pbxproj
+          
+          # 如果项目有 project.yml，使用 xcodegen 重新渲染工程
+          if [ -f "project.yml" ]; then
+            xcodegen generate
+          fi
 
-      # 4. 创建 Dummy 密钥和描述文件 (欺骗 package_ios.sh 的检查)
+          # 【关键修正】将 project.pbxproj 里的 objectVersion 77 强制降级替换为 60 (Xcode 15/16 通用)
+          find . -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
+
+      # 4. 创建 Dummy 密钥和描述文件 (欺骗 package_ios.sh 的 cp/check 检查)
       - name: Create Dummy Secrets & Provision Profile
         run: |
           mkdir -p IOS-key
