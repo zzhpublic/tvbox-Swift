@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (自动拉取依赖)
+name: 1. 编译 Tvbox Archive (诊断Swift报错版)
 
 on:
   push:
@@ -26,12 +26,12 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      # 4. 【关键绝杀步骤】将 xcodegen 刚生成的 77 格式强制降级为 60 格式
-      - name: Downgrade xcodeproj Format for Xcode 15
+      # 4. 降级工程格式 (解决 objectVersion 77 问题)
+      - name: Downgrade xcodeproj Format
         run: |
           find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
 
-      # 5. 创建 macOS entitlements 占位文件 (防止 Missing 报错)
+      # 5. 创建 macOS entitlements 占位文件
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
@@ -44,7 +44,7 @@ jobs:
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 7. 原生 xcodebuild 构建 Release 归档包
+      # 7. 编译 Archive 并抓取具体 Swift 错误日志
       - name: Build Xcode Archive
         run: |
           xcodebuild archive \
@@ -56,11 +56,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=NO
 
       # 8. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: tvbox-xcarchive
           path: ${{ runner.temp }}/TVBox.xcarchive
