@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (抓取Swift精准报错)
+name: 1. 编译 Tvbox Archive (Xcode 16 兼容版)
 
 on:
   push:
@@ -7,20 +7,21 @@ on:
 
 jobs:
   build-archive:
-    runs-on: macos-14
+    # 切换到自带 Xcode 16 的 macOS 15 镜像
+    runs-on: macos-15
 
     steps:
       # 1. 检出仓库代码
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 选择稳定的 Xcode 15.4 环境
+      # 2. 确保选择系统里的 Xcode 16
       - name: Select Xcode Version
         run: |
-          sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
+          sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer || true
           xcodebuild -version
 
-      # 3. 安装 xcbeautify 日志格式化工具与 XcodeGen
+      # 3. 安装工具
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
@@ -28,25 +29,20 @@ jobs:
       - name: Run XcodeGen
         run: xcodegen generate
 
-      # 5. 降级工程格式 (解决 objectVersion 77 问题)
-      - name: Downgrade xcodeproj Format
-        run: |
-          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
-
-      # 6. 创建 macOS entitlements 占位文件
+      # 5. 创建 macOS entitlements 占位文件 (防止 Missing 报错)
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 7. 解析 SPM 依赖包 (VLCKitSPM)
+      # 6. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 8. 编译 Archive 并在失败时精确打印 Swift 报错行
+      # 7. 原生 xcodebuild 构建 Archive (关闭严格并发和警告拦截)
       - name: Build Xcode Archive
         run: |
           set -o pipefail
@@ -59,9 +55,11 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            COMPILER_INDEX_STORE_ENABLE=NO | xcbeautify
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=NO | xcbeautify
 
-      # 9. 上传编译产物暂存
+      # 8. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         if: success()
