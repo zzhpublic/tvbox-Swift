@@ -7,7 +7,6 @@ on:
 
 jobs:
   build-archive:
-    # 使用 macOS 14 镜像 (稳定内置 iOS 17 SDK & Xcode 15.4)
     runs-on: macos-14
 
     steps:
@@ -21,26 +20,31 @@ jobs:
           sudo xcode-select -switch /Applications/Xcode_15.4.app/Contents/Developer
           xcodebuild -version
 
-      # 3. 安装 XcodeGen 并根据 project.yml 重新生成 .xcodeproj
+      # 3. 安装 XcodeGen 并生成工程
       - name: Install & Run XcodeGen
         run: |
           brew install xcodegen
           xcodegen generate
 
-      # 4. 【补全缺失文件】创建 tvbox-macOS.entitlements 占位文件防止生成/编译失败
+      # 4. 【关键绝杀步骤】将 xcodegen 刚生成的 77 格式强制降级为 60 格式
+      - name: Downgrade xcodeproj Format for Xcode 15
+        run: |
+          find tvbox.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' {} +
+
+      # 5. 创建 macOS entitlements 占位文件 (防止 Missing 报错)
       - name: Fix Missing Entitlements File
         run: |
           mkdir -p tvbox
           touch tvbox/tvbox-macOS.entitlements
 
-      # 5. 【关键步骤：解决依赖缺失】预解析并下载 SPM 依赖包 (VLCKitSPM)
+      # 6. 解析 SPM 依赖包 (VLCKitSPM)
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project tvbox.xcodeproj \
             -scheme "tvbox"
 
-      # 6. 原生 xcodebuild 构建 Release 归档包 (完全禁用签名要求)
+      # 7. 原生 xcodebuild 构建 Release 归档包
       - name: Build Xcode Archive
         run: |
           xcodebuild archive \
@@ -54,7 +58,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO
 
-      # 7. 上传编译产物暂存（供签名 Workflow 下载）
+      # 8. 上传编译产物暂存
       - name: Upload Archive Artifact
         uses: actions/upload-artifact@v4
         with:
