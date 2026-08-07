@@ -1,4 +1,4 @@
-name: 1. 编译 Tvbox Archive (精修 MainActor 隔离版)
+name: 1. 编译 Tvbox Archive (精准 MainActor 修补版)
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
       - name: Install Build Tools
         run: brew install xcodegen xcbeautify
 
-      # 4. 【核心修复】精准修补代码中的 await 缺失与 MainActor 隔离报错
+      # 4. 【核心修复】精准修复语法顺序与 MainActor 隔离
       - name: Auto Patch Swift Code Errors
         run: |
           # 1. 移除 Xcode 16 专有的 @retroactive 关键字
@@ -36,12 +36,14 @@ jobs:
           find tvbox -name "*.swift" -exec sed -i '' 's/CacheStore.shared.clearHistory(/await CacheStore.shared.clearHistory(/g' {} +
           find tvbox -name "*.swift" -exec sed -i '' 's/await await/await/g' {} +
 
-          # 3. 精准给所有 PlayerView / VLCPlayerView / PlayerController 中的关键清理方法添加 @MainActor
-          find tvbox -name "*.swift" -exec sed -i '' 's/func cleanUp/@MainActor func cleanUp/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/func cleanup/@MainActor func cleanup/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/func resetPlayer/@MainActor func resetPlayer/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/func stopPlayer/@MainActor func stopPlayer/g' {} +
-          find tvbox -name "*.swift" -exec sed -i '' 's/func dismantleUIView/@MainActor static func dismantleUIView/g' {} +
+          # 3. 【精准修复】直接将包含 VLC/Player 的 View 结构体整体修饰为 @MainActor
+          find tvbox -name "*.swift" -exec sed -i '' 's/struct VLCPlayerView/@MainActor struct VLCPlayerView/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/struct PlayerView/@MainActor struct PlayerView/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/class Coordinator/@MainActor class Coordinator/g' {} +
+
+          # 4. 精准将 @MainActor 放置在 private/fileprivate 访问修饰符的最前面
+          find tvbox -name "*.swift" -exec sed -i '' 's/private func cleanupPlayer/@MainActor private func cleanupPlayer/g' {} +
+          find tvbox -name "*.swift" -exec sed -i '' 's/fileprivate func cleanupPlayer/@MainActor fileprivate func cleanupPlayer/g' {} +
 
       # 5. 运行 XcodeGen 生成工程
       - name: Run XcodeGen
