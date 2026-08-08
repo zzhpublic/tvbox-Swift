@@ -1,52 +1,151 @@
 import Foundation
 
 /// CatPaw 协议处理器 - 集成 CatPawOpen 的协议解析能力
-/// 负责将 CatPawOpen 的数据源协议转换为 tvbox-Swift 可用的格式
+/// 支持 index.js.md5 格式和标准 JSON/XML 数据源
 /// Type 5 专门用于 CatPawOpen 协议处理
 @MainActor
 class CatPawProtocolHandler {
     static let shared = CatPawProtocolHandler()
     
     private let network = NetworkManager.shared
-    private var nodeJSRuntime: NodeJSRuntime?
     
-    private init() {
-        initializeNodeRuntime()
-    }
-    
-    // MARK: - 初始化 Node.js 运行时
-    
-    /// 初始化 Node.js 运行时环境
-    private func initializeNodeRuntime() {
-        // 集成步骤:
-        // 1. 添加 Node.js SPM 包依赖到 project.yml
-        // 2. 创建 NodeJSRuntime 实例
-        // nodeJSRuntime = NodeJSRuntime()
-    }
+    private init() {}
     
     // MARK: - 协议处理主方法
     
     /// 处理 CatPawOpen 数据源 (Type 5)
-    /// - Parameters:
-    ///   - sourceUrl: CatPawOpen 源 URL 或 JSON 配置
-    /// - Returns: 转换后的源数据
+    /// 支持三种格式:
+    /// 1. http://host:port/index.js.md5 (CatPawOpen Node.js 服务)
+    /// 2. 标准 JSON 数据源
+    /// 3. 标准 XML 数据源
     func processSource(url sourceUrl: String) async throws -> ProcessedSource {
         guard !sourceUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CatPawError.invalidSourceUrl("源地址不能为空")
         }
         
-        // CatPawOpen 优先尝试 JSON，其次是 XML 格式
+        // 检查是否是 CatPawOpen Node.js 服务
+        if sourceUrl.contains("index.js.md5") || sourceUrl.contains("index.js") {
+            return try await processCatPawOpenService(sourceUrl)
+        }
+        
+        // 优先尝试 JSON，其次是 XML 格式
         do {
             return try await processJSONSource(sourceUrl)
         } catch {
-            // 如果 JSON 解析失败，尝试 XML
             do {
                 return try await processXMLSource(sourceUrl)
             } catch {
-                // 两种格式都失败，抛出最后的错误
-                throw CatPawError.parseError("无法解析数据源，已尝试 JSON 和 XML 格式")
+                throw CatPawError.parseError("无法解析数据源，已尝试 CatPawOpen 服务、JSON 和 XML 格式")
             }
         }
+    }
+    
+    // MARK: - CatPawOpen 服务处理
+    
+    /// 处理 CatPawOpen Node.js 服务 (index.js.md5)
+    /// 该服务返回配置格式，需要解析其中的 video.sites 数据
+    private func processCatPawOpenService(_ serviceUrl: String) async throws -> ProcessedSource {
+        // 将 index.js.md5 URL 转换为 /config 端点
+        let configUrl = try buildCatPawConfigUrl(from: serviceUrl)
+        
+        let jsonContent = try await network.getString(from: configUrl)
+        guard let jsonData = jsonContent.data(using: .utf8) else {
+            throw CatPawError.decodingError("CatPawOpen 配置无法解码")
+        }
+        
+        if let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+            return try parseCatPawOpenConfig(json, originalUrl: serviceUrl)
+        }
+        
+        throw CatPawError.parseError("无效的 CatPawOpen 配置格式")
+    }
+    
+    /// 构建 CatPawOpen 服务的配置 URL
+    /// 将 http://host:port/index.js.md5 转换为 http://host:port/config
+    private func buildCatPawConfigUrl(from mdUrl: String) throws -> String {
+        var url = mdUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // 移除 index.js.md5 或 index.js 后缀，替换为 /config
+        if url.contains("index.js.md5") {
+            url = url.replacingOccurrences(of: "index.js.md5", with: "config")
+        } else if url.hasSuffix("/index.js") {
+            url = url.replacingOccurrences(of: "/index.js", with: "/config")
+        } else if url.hasSuffix("/") {
+            url += "config"
+        } else {
+            url += "/config"
+        }
+        
+        return url
+    }
+    
+    /// 解析 CatPawOpen 配置数据
+    /// 配置包含 video/read/comic/music/pan 等多个分类
+    private func parseCatPawOpenConfig(_ json: [String: Any], originalUrl: String) throws -> ProcessedSource {
+        var allVideos: [CatPawVideo] = []
+        
+        // 优先解析 video 分类
+        if let videoConfig = json["video"] as? [String: Any],
+           let sites = videoConfig["sites"] as? [[String: Any]] {
+            
+            // 从 sites 中提取站点信息并转换为视频对象
+            for site in sites {
+                let siteKey = site["key"] as? String ?? ""
+                let siteName = site["name"] as? String ?? ""
+                let siteApi = site["api"] as? String ?? ""
+                
+                var video = CatPawVideo()
+                video.id = siteKey
+                video.name = siteName
+                video.pic = site["pic"] as? String ?? ""
+                video.note = siteName  // 站点名称作为备注
+                
+                // 附加字段
+                if let siteUrl = site["url"] as? String {
+                    video.des = siteUrl
+                }
+                
+                if !video.id.isEmpty && !video.name.isEmpty {
+                    allVideos.append(video)
+                }
+            }
+        }
+        
+        // 如果 video 为空，尝试其他分类
+        if allVideos.isEmpty {
+            for (categoryKey, categoryValue) in json {
+                if let categoryDict = categoryValue as? [String: Any],
+                   let sites = categoryDict["sites"] as? [[String: Any]] {
+                    
+                    for site in sites {
+                        let siteKey = site["key"] as? String ?? ""
+                        let siteName = site["name"] as? String ?? ""
+                        
+                        var video = CatPawVideo()
+                        video.id = siteKey
+                        video.name = siteName
+                        video.pic = site["pic"] as? String ?? ""
+                        video.note = siteName
+                        
+                        if !video.id.isEmpty && !video.name.isEmpty {
+                            allVideos.append(video)
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 将所有站点转换为分类
+        let categories = allVideos.map { video in
+            SourceCategory(id: video.id, name: video.name)
+        }
+        
+        return ProcessedSource(
+            sourceUrl: originalUrl,
+            categories: categories,
+            videos: allVideos,
+            metadata: ["type": "catpawopen"]
+        )
     }
     
     // MARK: - 协议具体处理逻辑
@@ -270,13 +369,6 @@ struct CatPawVideo: Codable {
         self.pic = pic
         self.note = note
     }
-}
-
-// MARK: - Node.js 运行时接口（预留）
-
-/// Node.js 运行时封装 - 用于执行动态脚本
-protocol NodeJSRuntime {
-    func executeScript(source: String) async throws -> ProcessedSource
 }
 
 // MARK: - 错误定义
