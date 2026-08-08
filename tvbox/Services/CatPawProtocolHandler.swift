@@ -9,33 +9,158 @@ class CatPawProtocolHandler {
     
     private let network = NetworkManager.shared
     
+    /// 已知的 CatPawOpen 域名特征
+    private static let catpawDomainPatterns = [
+        "xn--4kq62z5rby2qupq9ub.top",  // cat.xn--4kq62z5rby2qupq9ub.top
+        "catpaw",
+        "catvod",
+        "catopen"
+    ]
+    
     private init() {}
+    
+    // MARK: - 源类型识别
+    
+    /// 数据源类型
+    enum SourceType {
+        case standard      // 普通 TVBox 源
+        case catpawopen    // CatPawOpen 服务
+        case unknown       // 未知
+    }
+    
+    /// 先通过 URL 特征识别源类型
+    func identifySourceTypeByUrl(url: String) -> SourceType {
+        let trimmed = url.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // 特征 1: 检查已知的 CatPawOpen 特殊路径
+        if trimmed.contains("index.js.md5") || 
+           trimmed.contains("index.js") ||
+           trimmed.contains("/config") {
+            return .catpawopen
+        }
+        
+        // 特征 2: 检查是否有用户认证信息（user:pass@host）
+        // 普通 TVBox 源很少有身份验证，CatPawOpen 服务经常有
+        if trimmed.contains("@") {
+            // 进一步检查是否是已知的 CatPawOpen 域名
+            for pattern in Self.catpawDomainPatterns {
+                if trimmed.contains(pattern) {
+                    return .catpawopen
+                }
+            }
+        }
+        
+        // 特征 3: 检查是否包含已知的 CatPawOpen 域名
+        for domain in Self.catpawDomainPatterns {
+            if trimmed.contains(domain) {
+                return .catpawopen
+            }
+        }
+        
+        // 特征 4: 检查 spider 路由（CatPawOpen 特有）
+        if trimmed.contains("/spider/") {
+            return .catpawopen
+        }
+        
+        return .unknown
+    }
+    
+    /// 再通过响应内容验证源类型（精确识别）
+    func identifySourceByResponse(url: String) async throws -> SourceType {
+        // 先进行快速的 URL 识别
+        let urlHint = identifySourceTypeByUrl(url: url)
+        
+        // 如果 URL 特征明确指向 CatPawOpen，直接返回
+        if urlHint == .catpawopen {
+            return .catpawopen
+        }
+        
+        // 对于 .unknown 或 .standard，需要通过响应内容验证
+        do {
+            let testUrl = urlHint == .catpawopen ? 
+                try buildCatPawConfigUrl(from: url) : url
+            
+            let jsonContent = try await network.getString(from: testUrl)
+            guard let jsonData = jsonContent.data(using: .utf8) else {
+                return .unknown
+            }
+            
+            if let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                // 检查 CatPawOpen 特有的响应结构
+                // CatPawOpen 配置包含 video, read, comic, music, pan 等多个分类
+                let catpawKeys = ["video", "read", "comic", "music", "pan"]
+                let hasMultipleCategories = catpawKeys.filter { json[$0] != nil }.count >= 2
+                
+                if hasMultipleCategories {
+                    // 这是 CatPawOpen 配置格式
+                    return .catpawopen
+                }
+                
+                // 检查标准 TVBox 结构
+                if json["class"] != nil && json["list"] != nil {
+                    return .standard
+                }
+                
+                // 如果只有一个分类（如只有 video），判断其内部结构
+                if json["video"] != nil && json["class"] == nil {
+                    // 可能是 CatPawOpen 的 video 分类
+                    if let videoConfig = json["video"] as? [String: Any],
+                       videoConfig["sites"] != nil {
+                        return .catpawopen
+                    }
+                }
+            }
+        } catch {
+            // 网络错误或 JSON 解析失败
+            // 如果 URL 本身有 CatPawOpen 特征，仍然返回 .catpawopen
+            if urlHint == .catpawopen {
+                return .catpawopen
+            }
+        }
+        
+        return .unknown
+    }
     
     // MARK: - 协议处理主方法
     
-    /// 处理 CatPawOpen 数据源 (Type 5)
-    /// 支持三种格式:
-    /// 1. http://host:port/index.js.md5 (CatPawOpen Node.js 服务)
-    /// 2. 标准 JSON 数据源
-    /// 3. 标准 XML 数据源
+    /// 智能处理 CatPawOpen 数据源 (Type 5)
+    /// 自动识别源类型并调用相应的处理方法
     func processSource(url sourceUrl: String) async throws -> ProcessedSource {
         guard !sourceUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CatPawError.invalidSourceUrl("源地址不能为空")
         }
         
-        // 检查是否是 CatPawOpen Node.js 服务
-        if sourceUrl.contains("index.js.md5") || sourceUrl.contains("index.js") {
-            return try await processCatPawOpenService(sourceUrl)
-        }
+        // 智能识别源类型
+        let sourceType = try await identifySourceByResponse(url: sourceUrl)
         
-        // 优先尝试 JSON，其次是 XML 格式
-        do {
-            return try await processJSONSource(sourceUrl)
-        } catch {
+        switch sourceType {
+        case .catpawopen:
+            return try await processCatPawOpenService(sourceUrl)
+        case .standard:
+            // 优先尝试 JSON，其次是 XML 格式
             do {
-                return try await processXMLSource(sourceUrl)
+                return try await processJSONSource(sourceUrl)
             } catch {
-                throw CatPawError.parseError("无法解析数据源，已尝试 CatPawOpen 服务、JSON 和 XML 格式")
+                do {
+                    return try await processXMLSource(sourceUrl)
+                } catch {
+                    throw CatPawError.parseError("无法解析数据源，已尝试 JSON 和 XML 格式")
+                }
+            }
+        case .unknown:
+            // 未知格式，尝试所有方式
+            do {
+                return try await processCatPawOpenService(sourceUrl)
+            } catch {
+                do {
+                    return try await processJSONSource(sourceUrl)
+                } catch {
+                    do {
+                        return try await processXMLSource(sourceUrl)
+                    } catch {
+                        throw CatPawError.parseError("无法解析数据源，已尝试 CatPawOpen、JSON 和 XML 格式")
+                    }
+                }
             }
         }
     }
@@ -72,7 +197,7 @@ class CatPawProtocolHandler {
             url = url.replacingOccurrences(of: "/index.js", with: "/config")
         } else if url.hasSuffix("/") {
             url += "config"
-        } else {
+        } else if !url.contains("/config") {
             url += "/config"
         }
         
@@ -103,6 +228,12 @@ class CatPawProtocolHandler {
                 // 附加字段
                 if let siteUrl = site["url"] as? String {
                     video.des = siteUrl
+                }
+                if let siteType = site["type"] as? Int {
+                    video.des = video.des ?? ""
+                }
+                if let siteApi = siteApi as String? {
+                    video.actor = siteApi
                 }
                 
                 if !video.id.isEmpty && !video.name.isEmpty {
@@ -148,7 +279,7 @@ class CatPawProtocolHandler {
         )
     }
     
-    // MARK: - 协议具体处理逻辑
+    // MARK: - 标准源处理逻辑
     
     /// 处理 JSON 类型数据源
     private func processJSONSource(_ sourceUrl: String) async throws -> ProcessedSource {
@@ -247,7 +378,7 @@ class CatPawProtocolHandler {
     
     // MARK: - XML 解析工具
     
-    /// 从 XML 提取分类信息
+    /// 从 XML 提取分类��息
     private func extractXMLCategories(from xml: String) -> [SourceCategory] {
         var categories: [SourceCategory] = []
         let pattern = "<ty\\s+id=['\"]([^'\"]+)['\"][^>]*>([^<]+)</ty>"
