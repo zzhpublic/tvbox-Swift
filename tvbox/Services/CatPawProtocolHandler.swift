@@ -27,22 +27,10 @@ class CatPawProtocolHandler {
         let trimmed = url.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         
         // 特征 1: 检查已知的 CatPawOpen 特殊路径
-        if trimmed.contains("index.js.md5") || 
-           trimmed.contains("index.js") ||
-           trimmed.contains("/config") {
+        if trimmed.contains("index.js.md5") {
             return .catpawopen
         }
         
-        // 特征 2: 检查是否有用户认证信息（user:pass@host）
-        // 普通 TVBox 源很少有身份验证，CatPawOpen 服务经常有
-        if trimmed.contains("@") {
-            // 进一步检查是否是已知的 CatPawOpen 域名
-            for pattern in Self.catpawDomainPatterns {
-                if trimmed.contains(pattern) {
-                    return .catpawopen
-                }
-            }
-        }
         
         
         return .unknown
