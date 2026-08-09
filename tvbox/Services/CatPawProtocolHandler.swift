@@ -9,13 +9,7 @@ class CatPawProtocolHandler {
     
     private let network = NetworkManager.shared
     
-    /// 已知的 CatPawOpen 域名特征
-    private static let catpawDomainPatterns = [
-        "xn--4kq62z5rby2qupq9ub.top",  // cat.xn--4kq62z5rby2qupq9ub.top
-        "catpaw",
-        "catvod",
-        "catopen"
-    ]
+
     
     private init() {}
     
@@ -50,17 +44,6 @@ class CatPawProtocolHandler {
             }
         }
         
-        // 特征 3: 检查是否包含已知的 CatPawOpen 域名
-        for domain in Self.catpawDomainPatterns {
-            if trimmed.contains(domain) {
-                return .catpawopen
-            }
-        }
-        
-        // 特征 4: 检查 spider 路由（CatPawOpen 特有）
-        if trimmed.contains("/spider/") {
-            return .catpawopen
-        }
         
         return .unknown
     }
@@ -192,7 +175,7 @@ class CatPawProtocolHandler {
         
         // 移除 index.js.md5 或 index.js 后缀，替换为 /config
         if url.contains("index.js.md5") {
-            url = url.replacingOccurrences(of: "index.js.md5", with: "config")
+            url = url.replacingOccurrences(of: "index.js.md5", with: "index.config.js")
         } else if url.hasSuffix("/index.js") {
             url = url.replacingOccurrences(of: "/index.js", with: "/config")
         } else if url.hasSuffix("/") {
