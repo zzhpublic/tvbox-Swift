@@ -357,7 +357,7 @@ class CatPawProtocolHandler {
     
     /// 从 JSON 解析单个视频对象
     private func parseCatPawVideoFromJSON(_ json: [String: Any]) -> CatPawVideo? {
-        let video = CatPawVideo(
+        var video = CatPawVideo(
             id: (json["vod_id"] as? String) ?? String(describing: json["vod_id"] ?? ""),
             name: json["vod_name"] as? String ?? "",
             pic: json["vod_pic"] as? String ?? "",
