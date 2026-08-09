@@ -309,10 +309,10 @@ class CatPawProtocolHandler {
         var categories: [SourceCategory] = []
         if let classList = json["class"] as? [[String: Any]] {
             for cls in classList {
-                if let id = cls["type_id"] as? String ?? String(describing: cls["type_id"] ?? ""),
-                   let name = cls["type_name"] as? String {
+                    let id = cls["type_id"] as? String ?? String(describing: cls["type_id"] ?? "")
+                    let name = cls["type_name"]  as? String ?? String(describing: cls["type_name"] ?? "")
+
                     categories.append(SourceCategory(id: id, name: name))
-                }
             }
         }
         
