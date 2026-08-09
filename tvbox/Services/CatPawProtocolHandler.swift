@@ -90,24 +90,21 @@ class CatPawProtocolHandler {
                 // CatPawOpen 配置包含 video, read, comic, music, pan 等多个分类
                 let catpawKeys = ["video", "read", "comic", "music", "pan"]
                 let hasMultipleCategories = catpawKeys.filter { json[$0] != nil }.count >= 2
-                
+                 
                 if hasMultipleCategories {
                     // 这是 CatPawOpen 配置格式
                     return .catpawopen
                 }
-                
+                 
                 // 检查标准 TVBox 结构
                 if json["class"] != nil && json["list"] != nil {
                     return .standard
                 }
-                
+                 
                 // 如果只有一个分类（如只有 video），判断其内部结构
-                if json["video"] != nil && json["class"] == nil {
+                if let video = json["video"], let videoConfig = video as? [String: Any], videoConfig["sites"] != nil, json["class"] == nil {
                     // 可能是 CatPawOpen 的 video 分类
-                    if let videoConfig = json["video"] as? [String: Any],
-                       videoConfig["sites"] != nil {
-                        return .catpawopen
-                    }
+                    return .catpawopen
                 }
             }
         } catch {
