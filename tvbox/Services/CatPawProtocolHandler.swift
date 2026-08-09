@@ -354,24 +354,33 @@ class CatPawProtocolHandler {
     
     /// 从 JSON 解析单个视频对象
     private func parseCatPawVideoFromJSON(_ json: [String: Any]) -> CatPawVideo? {
-        let video = CatPawVideo(
-            id: (json["vod_id"] as? String) ?? String(describing: json["vod_id"] ?? ""),
-            name: json["vod_name"] as? String ?? "",
-            pic: json["vod_pic"] as? String ?? "",
-            note: json["vod_remarks"] as? String ?? ""
-        )
+            // 从 JSON 解析单个视频对象
+            let video = CatPawVideo()
         
-        // 附加字段
-        if let year = json["vod_year"] as? String { video.year = year }
-        if let area = json["vod_area"] as? String { video.area = area }
-        if let type = json["vod_type"] as? String { video.type = type }
-        if let actor = json["vod_actor"] as? String { video.actor = actor }
-        if let director = json["vod_director"] as? String { video.director = director }
-        if let des = json["vod_content"] as? String { video.des = des }
+            // 基本字段 - 使用安全的可选绑定
+            if let vodId = json["vod_id"] as? String {
+                video.id = vodId
+            } else if let vodId = json["vod_id"] {
+                video.id = String(describing: vodId)
+            } else {
+                video.id = ""
+            }
         
-        guard !video.id.isEmpty && !video.name.isEmpty else { return nil }
-        return video
-    }
+            video.name = json["vod_name"] as? String ?? ""
+            video.pic = json["vod_pic"] as? String ?? ""
+            video.note = json["vod_remarks"] as? String ?? ""
+        
+            // 附加字段 - 使用可选绑定，避免对常量进行赋值
+            if let year = json["vod_year"] as? String { video.year = year }
+            if let area = json["vod_area"] as? String { video.area = area }
+            if let type = json["vod_type"] as? String { video.type = type }
+            if let actor = json["vod_actor"] as? String { video.actor = actor }
+            if let director = json["vod_director"] as? String { video.director = director }
+            if let des = json["vod_content"] as? String { video.des = des }
+        
+            guard !video.id.isEmpty && !video.name.isEmpty else { return nil }
+            return video
+        }
     
     // MARK: - XML 解析工具
     
