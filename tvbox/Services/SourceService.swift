@@ -32,8 +32,8 @@ class SourceService {
         }
         
         let jsonStr: String
-        if sourceBean.type == 5 {
-            // Type 5: CatPaw 协议 — 从 /config 端点获取站点列表作为分类
+        if sourceBean.isCatPaw {
+            // CatPaw 协议（type==5 或 URL 以 index.js.md5 结尾）— 从 /config 端点获取站点列表作为分类
             return try await getSortCatPaw(sourceBean: sourceBean)
         } else if sourceBean.type == 0 {
             // XML 接口
@@ -175,8 +175,8 @@ class SourceService {
         guard sourceBean.isSupportedInSwift else { throw SourceError.unsupportedType(sourceBean.typeDescription) }
         guard sourceBean.isHttpApi else { throw SourceError.invalidApiUrl(api) }
         
-        if sourceBean.type == 5 {
-            // Type 5: CatPaw 协议 — 解析子站点 API 并代理请求
+        if sourceBean.isCatPaw {
+            // CatPaw 协议 — 解析子站点 API 并代理请求
             return try await getListCatPaw(sourceBean: sourceBean, sortData: sortData, page: page, filters: filters)
         }
         
@@ -295,8 +295,8 @@ class SourceService {
         guard sourceBean.isSupportedInSwift else { throw SourceError.unsupportedType(sourceBean.typeDescription) }
         guard sourceBean.isHttpApi else { throw SourceError.invalidApiUrl(api) }
         
-        if sourceBean.type == 5 {
-            // Type 5: CatPaw 协议 — 解析子站点 API 并代理详情请求
+        if sourceBean.isCatPaw {
+            // CatPaw 协议 — 解析子站点 API 并代理详情请求
             return try await getDetailCatPaw(sourceBean: sourceBean, vodId: vodId)
         }
         
@@ -376,8 +376,8 @@ class SourceService {
         guard sourceBean.isSupportedInSwift else { throw SourceError.unsupportedType(sourceBean.typeDescription) }
         guard sourceBean.isHttpApi else { throw SourceError.invalidApiUrl(api) }
         
-        if sourceBean.type == 5 {
-            // Type 5: CatPaw 协议 — 跨站点搜索
+        if sourceBean.isCatPaw {
+            // CatPaw 协议 — 跨站点搜索
             return try await searchCatPaw(sourceBean: sourceBean, keyword: keyword)
         }
         
