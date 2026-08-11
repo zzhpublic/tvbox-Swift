@@ -26,7 +26,7 @@ class SourceService {
             throw SourceError.unsupportedType(sourceBean.typeDescription)
         }
         
-        // 确保 api 是有效的 HTTP URL
+        // 确保 api ���有效的 HTTP URL
         guard sourceBean.isHttpApi else {
             throw SourceError.invalidApiUrl(api)
         }
@@ -182,6 +182,8 @@ class SourceService {
         
         let url: String
         if sourceBean.type == 0 {
+            url = try buildURL(
+                base: api,
                 queryItems: [
                     URLQueryItem(name: "ac", value: "videolist"),
                     URLQueryItem(name: "t", value: sortData.id),
@@ -724,7 +726,7 @@ class SourceService {
     
     private func decodeXMLText(_ raw: String) -> String {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("<![CDATA["), value.hasSuffix("]]>"), value.count >= 12 {
+        if value.hasPrefix("<![CDATA["), value.hasSuffix("]]>") && value.count >= 12 {
             value.removeFirst(9)
             value.removeLast(3)
         }
