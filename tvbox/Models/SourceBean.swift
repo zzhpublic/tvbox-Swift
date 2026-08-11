@@ -19,7 +19,8 @@ struct SourceBean: Codable, Identifiable, Hashable {
     let quickSearch: Int
     /// 源声明的播放器类型（历史字段，Swift 端目前主要走统一播放器策略）。
     let playerType: Int
-    /// 源协议类型：0 XML，1 JSON，3 JAR，4 Remote。
+    /// 源协议类型：0 XML，1 JSON，3 JAR，4 Remote，5 CatPaw。
+    /// 注：api 以 index.js.md5 结尾的源即使 type 不为 5，也按 CatPaw 处理（见 isCatPaw）。
     let type: Int
     /// 扩展参数（remote 源常用）。
     let ext: String?
@@ -42,19 +43,24 @@ struct SourceBean: Codable, Identifiable, Hashable {
     var isFilterable: Bool { filterable == 1 }
     var isQuickSearchEnabled: Bool { quickSearch == 1 }
     
+    /// 是否为 CatPaw 协议源：配置的 type==5，或 api URL 以 index.js.md5 结尾
+    var isCatPaw: Bool {
+        return type == 5 || api.lowercased().hasSuffix("index.js.md5")
+    }
+    
     /// 是否在 Swift 版中受支持（type=3 为 JAR/Spider，需要 Java 运行时，暂不支持）
     var isSupportedInSwift: Bool {
-        return type == 0 || type == 1 || type == 4 || type == 5
+        return type == 0 || type == 1 || type == 4 || isCatPaw
     }
     
     /// 类型描述
     var typeDescription: String {
+        if isCatPaw { return "CatPaw" }
         switch type {
         case 0: return "XML"
         case 1: return "JSON"
         case 3: return "JAR"
         case 4: return "Remote"
-        case 5: return "CatPaw"
         default: return "未知"
         }
     }
