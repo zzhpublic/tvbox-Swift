@@ -60,12 +60,29 @@ class NetworkManager {
         headers: [String: String]? = nil,
         maxRetries: Int = NetworkManager.defaultMaxRetries
     ) async throws -> String {
-        guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard var components = URLComponents(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let url = components.url else {
             throw NetworkError.invalidURL(urlString)
         }
-        
-        var request = URLRequest(url: url)
+
+        // 提取 Basic Auth 凭据并从 URL 中移除，避免凭据暴露在请求 URL 中
+        var basicAuthHeader: String? = nil
+        if let user = components.user {
+            let password = components.password ?? ""
+            let credentials = "\(user):\(password)"
+            if let encoded = credentials.data(using: .utf8)?.base64EncodedString() {
+                basicAuthHeader = "Basic \(encoded)"
+            }
+            components.user = nil
+            components.password = nil
+        }
+
+        let cleanURL = components.url ?? url
+        var request = URLRequest(url: cleanURL)
         request.httpMethod = "GET"
+        if let auth = basicAuthHeader {
+            request.setValue(auth, forHTTPHeaderField: "Authorization")
+        }
         headers?.forEach { request.setValue($1, forHTTPHeaderField: $0) }
         
         let (data, httpResponse) = try await performRequest(request, maxRetries: maxRetries)
