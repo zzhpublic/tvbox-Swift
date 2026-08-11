@@ -7,6 +7,9 @@ class SourceService {
     
     private let network = NetworkManager.shared
     
+    /// CatPaw 站点配置缓存：sourceBean.key → 站点列表（key → (api, type)）
+    private var catPawSiteCache: [String: [String: (api: String, type: Int)]] = [:]
+    
     private init() {}
     
     // MARK: - 获取分类列表
@@ -29,7 +32,10 @@ class SourceService {
         }
         
         let jsonStr: String
-        if sourceBean.type == 0 {
+        if sourceBean.type == 5 {
+            // Type 5: CatPaw 协议 — 从 /config 端点获取站点列表作为分类
+            return try await getSortCatPaw(sourceBean: sourceBean)
+        } else if sourceBean.type == 0 {
             // XML 接口
             jsonStr = try await network.getString(from: api)
         } else if sourceBean.type == 4 {
@@ -169,11 +175,13 @@ class SourceService {
         guard sourceBean.isSupportedInSwift else { throw SourceError.unsupportedType(sourceBean.typeDescription) }
         guard sourceBean.isHttpApi else { throw SourceError.invalidApiUrl(api) }
         
+        if sourceBean.type == 5 {
+            // Type 5: CatPaw 协议 — 解析子站点 API 并代理请求
+            return try await getListCatPaw(sourceBean: sourceBean, sortData: sortData, page: page, filters: filters)
+        }
+        
         let url: String
         if sourceBean.type == 0 {
-            // XML 接口
-            url = try buildURL(
-                base: api,
                 queryItems: [
                     URLQueryItem(name: "ac", value: "videolist"),
                     URLQueryItem(name: "t", value: sortData.id),
@@ -285,6 +293,11 @@ class SourceService {
         guard sourceBean.isSupportedInSwift else { throw SourceError.unsupportedType(sourceBean.typeDescription) }
         guard sourceBean.isHttpApi else { throw SourceError.invalidApiUrl(api) }
         
+        if sourceBean.type == 5 {
+            // Type 5: CatPaw 协议 — 解析子站点 API 并代理详情请求
+            return try await getDetailCatPaw(sourceBean: sourceBean, vodId: vodId)
+        }
+        
         let url: String
         if sourceBean.type == 0 {
             url = try buildURL(
@@ -360,6 +373,11 @@ class SourceService {
         guard !api.isEmpty else { throw SourceError.emptyApi }
         guard sourceBean.isSupportedInSwift else { throw SourceError.unsupportedType(sourceBean.typeDescription) }
         guard sourceBean.isHttpApi else { throw SourceError.invalidApiUrl(api) }
+        
+        if sourceBean.type == 5 {
+            // Type 5: CatPaw 协议 — 跨站点搜索
+            return try await searchCatPaw(sourceBean: sourceBean, keyword: keyword)
+        }
         
         let url: String
         if sourceBean.type == 0 {
@@ -458,6 +476,133 @@ class SourceService {
             !CharacterSet.symbols.contains(scalar)
         }
         return String(String.UnicodeScalarView(scalars)).lowercased()
+    }
+    
+    // MARK: - CatPaw 协议支持 (Type 5)
+    
+    /// 获取 CatPaw 源的分类（每个子站点作为一个分类）和首页推荐
+    private func getSortCatPaw(sourceBean: SourceBean) async throws -> (sorts: [MovieSort.SortData], homeVideos: [Movie.Video]) {
+        let processedSource = try await CatPawProtocolHandler.shared.processSource(url: sourceBean.api)
+        
+        // 将 CatPaw 站点缓存，供后续 getList/getDetail/search 调用
+        var siteMap: [String: (api: String, type: Int)] = [:]
+        for video in processedSource.videos {
+            let siteApi = video.actor ?? ""
+            let siteType = 1  // CatPaw 子站通常为 JSON 类型
+            if !video.id.isEmpty && !siteApi.isEmpty {
+                siteMap[video.id] = (api: siteApi, type: siteType)
+            }
+        }
+        catPawSiteCache[sourceBean.key] = siteMap
+        
+        // 将子站点列表作为分类
+        let sorts = processedSource.categories.map { MovieSort.SortData(id: $0.id, name: $0.name) }
+        
+        // 尝试从第一个有效子站点获取首页内容
+        var homeVideos: [Movie.Video] = []
+        if let firstSite = processedSource.videos.first,
+           let siteInfo = siteMap[firstSite.id],
+           !siteInfo.api.isEmpty,
+           let url = try? buildURL(base: siteInfo.api, queryItems: [
+               URLQueryItem(name: "ac", value: "videolist"),
+               URLQueryItem(name: "pg", value: "1")
+           ]),
+           let jsonStr = try? await network.getString(from: url) {
+            homeVideos = (try? parseVideoList(jsonStr, sourceKey: sourceBean.key, type: siteInfo.type)) ?? []
+        }
+        
+        return (sorts, homeVideos)
+    }
+    
+    /// 获取 CatPaw 子站点的视频列表
+    private func getListCatPaw(sourceBean: SourceBean, sortData: MovieSort.SortData, page: Int, filters: [String: String]?) async throws -> [Movie.Video] {
+        let (siteApi, siteType) = try await resolveCatPawSite(sourceBean: sourceBean, siteKey: sortData.id)
+        
+        var queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "ac", value: "videolist"),
+            URLQueryItem(name: "t", value: sortData.id),
+            URLQueryItem(name: "pg", value: String(page))
+        ]
+        if let filters = filters {
+            for (key, value) in filters {
+                queryItems.append(URLQueryItem(name: key, value: value))
+            }
+        }
+        let url = try buildURL(base: siteApi, queryItems: queryItems)
+        let jsonStr = try await network.getString(from: url)
+        return try parseVideoList(jsonStr, sourceKey: sourceBean.key, type: siteType)
+    }
+    
+    /// 获取 CatPaw 子站点的视频详情
+    /// vodId 约定格式为 "siteKey:realId"；若无前缀则遍历已缓存站点
+    private func getDetailCatPaw(sourceBean: SourceBean, vodId: String) async throws -> VodInfo? {
+        let parts = vodId.split(separator: ":", maxSplits: 1)
+        if parts.count == 2 {
+            let siteKey = String(parts[0])
+            let realId = String(parts[1])
+            if let info = catPawSiteCache[sourceBean.key]?[siteKey] {
+                let url = try buildURL(base: info.api, queryItems: [
+                    URLQueryItem(name: "ac", value: "detail"),
+                    URLQueryItem(name: "ids", value: realId)
+                ])
+                let jsonStr = try await network.getString(from: url)
+                return try parseDetail(jsonStr, sourceKey: sourceBean.key, type: info.type)
+            }
+        }
+        // 回退：遍历所有已缓存站点
+        if let sites = catPawSiteCache[sourceBean.key] {
+            for (_, info) in sites {
+                if let url = try? buildURL(base: info.api, queryItems: [
+                       URLQueryItem(name: "ac", value: "detail"),
+                       URLQueryItem(name: "ids", value: vodId)
+                   ]),
+                   let jsonStr = try? await network.getString(from: url),
+                   let detail = try? parseDetail(jsonStr, sourceKey: sourceBean.key, type: info.type),
+                   detail != nil {
+                    return detail
+                }
+            }
+        }
+        return nil
+    }
+    
+    /// 在 CatPaw 所有子站点中并发搜索
+    private func searchCatPaw(sourceBean: SourceBean, keyword: String) async throws -> [Movie.Video] {
+        // 确保站点缓存已加载
+        if catPawSiteCache[sourceBean.key] == nil {
+            _ = try? await getSortCatPaw(sourceBean: sourceBean)
+        }
+        guard let sites = catPawSiteCache[sourceBean.key], !sites.isEmpty else {
+            return []
+        }
+        
+        return await withTaskGroup(of: [Movie.Video].self) { group in
+            for (_, info) in sites {
+                let capturedInfo = info
+                group.addTask { [self] in
+                    guard let url = try? self.buildURL(base: capturedInfo.api, queryItems: [
+                        URLQueryItem(name: "wd", value: keyword)
+                    ]) else { return [] }
+                    guard let jsonStr = try? await self.network.getString(from: url) else { return [] }
+                    return (try? self.parseVideoList(jsonStr, sourceKey: sourceBean.key, type: capturedInfo.type)) ?? []
+                }
+            }
+            var results: [Movie.Video] = []
+            for await partial in group { results.append(contentsOf: partial) }
+            return filterSearchResults(results, keyword: keyword)
+        }
+    }
+    
+    /// 解析 CatPaw 子站点信息（优先用缓存，缓存缺失时重新拉取配置）
+    private func resolveCatPawSite(sourceBean: SourceBean, siteKey: String) async throws -> (api: String, type: Int) {
+        if let cached = catPawSiteCache[sourceBean.key]?[siteKey] {
+            return cached
+        }
+        _ = try await getSortCatPaw(sourceBean: sourceBean)
+        guard let info = catPawSiteCache[sourceBean.key]?[siteKey] else {
+            throw SourceError.parseError("CatPaw 站点 '\(siteKey)' 未找到")
+        }
+        return info
     }
     
     // MARK: - Extend 解析

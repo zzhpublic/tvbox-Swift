@@ -44,7 +44,7 @@ struct SourceBean: Codable, Identifiable, Hashable {
     
     /// 是否在 Swift 版中受支持（type=3 为 JAR/Spider，需要 Java 运行时，暂不支持）
     var isSupportedInSwift: Bool {
-        return type == 0 || type == 1 || type == 4
+        return type == 0 || type == 1 || type == 4 || type == 5
     }
     
     /// 类型描述
@@ -54,6 +54,7 @@ struct SourceBean: Codable, Identifiable, Hashable {
         case 1: return "JSON"
         case 3: return "JAR"
         case 4: return "Remote"
+        case 5: return "CatPaw"
         default: return "未知"
         }
     }
