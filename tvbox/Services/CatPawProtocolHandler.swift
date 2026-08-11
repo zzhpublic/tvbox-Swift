@@ -164,13 +164,7 @@ class CatPawProtocolHandler {
         // 移除 index.js.md5 或 index.js 后缀，替换为 /config
         if url.contains("index.js.md5") {
             url = url.replacingOccurrences(of: "index.js.md5", with: "index.config.js")
-        } else if url.hasSuffix("/index.js") {
-            url = url.replacingOccurrences(of: "/index.js", with: "/config")
-        } else if url.hasSuffix("/") {
-            url += "config"
-        } else if !url.contains("/config") {
-            url += "/config"
-        }
+        } 
         
         return url
     }
