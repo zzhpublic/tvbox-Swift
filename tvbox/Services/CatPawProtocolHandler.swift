@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 
 /// CatPaw 协议处理器 - 集成 CatPawOpen 的协议解析能力
 /// 支持 index.js.md5 格式和标准 JSON/XML 数据源
@@ -139,21 +140,162 @@ class CatPawProtocolHandler {
     // MARK: - CatPawOpen 服务处理
     
     /// 处理 CatPawOpen Node.js 服务 (index.js.md5)
-    /// 该服务返回配置格式，需要解析其中的 video.sites 数据
+    /// 该服务返回配置格式，需要解析其中的 video.sites / sites.list 数据
     private func processCatPawOpenService(_ serviceUrl: String) async throws -> ProcessedSource {
         // 将 index.js.md5 URL 转换为 /config 端点
         let configUrl = try buildCatPawConfigUrl(from: serviceUrl)
         
-        let jsonContent = try await network.getString(from: configUrl)
-        guard let jsonData = jsonContent.data(using: .utf8) else {
-            throw CatPawError.decodingError("CatPawOpen 配置无法解码")
+        let rawContent = try await network.getString(from: configUrl)
+        guard !rawContent.isEmpty else {
+            throw CatPawError.decodingError("CatPawOpen 配置响应为空")
         }
-        
-        if let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+
+        // 尝试直接 JSON 解析（纯 JSON 格式）
+        if let jsonData = rawContent.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
             return try parseCatPawOpenConfig(json, originalUrl: serviceUrl)
         }
-        
+
+        // 响应为 JavaScript 代码（CommonJS module），用 JavaScriptCore 提取默认导出对象
+        if let json = extractJSDefaultExport(from: rawContent) {
+            return try parseCatPawOpenConfig(json, originalUrl: serviceUrl)
+        }
+
         throw CatPawError.parseError("无效的 CatPawOpen 配置格式")
+    }
+
+    /// 从 CommonJS JavaScript 源码中提取默认导出对象
+    /// 支持 `var xxx_default = { ... }` 和 `module.exports = { ... }` 两种常见格式
+    private func extractJSDefaultExport(from jsSource: String) -> [String: Any]? {
+        // 方式一：用 JavaScriptCore 执行脚本，读取导出值
+        if let result = extractViaJavaScriptCore(jsSource) {
+            return result
+        }
+        // 方式二：Regex 兜底——提取 var xxx_default = { ... } 的对象文字量，再转 JSON
+        return extractViaRegex(jsSource)
+    }
+
+    /// 用 JavaScriptCore 执行 CommonJS 脚本并提取导出对象
+    private func extractViaJavaScriptCore(_ jsSource: String) -> [String: Any]? {
+        guard let context = JSContext() else { return nil }
+
+        // 提供最小化的 CommonJS 运行时 shim
+        let shimScript = """
+        var module = { exports: {} };
+        var exports = module.exports;
+        var __defProp = Object.defineProperty;
+        var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+        var __getOwnPropNames = Object.getOwnPropertyNames;
+        var __hasOwnProp = Object.prototype.hasOwnProperty;
+        var __export = function(target, all) {
+          for (var name in all) {
+            __defProp(target, name, { get: all[name], enumerable: true });
+          }
+        };
+        var __copyProps = function(to, from, except, desc) {
+          if (from && typeof from === 'object' || typeof from === 'function') {
+            for (var key of __getOwnPropNames(from)) {
+              if (!__hasOwnProp.call(to, key) && key !== except) {
+                __defProp(to, key, { get: function() { return from[key]; }, enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+              }
+            }
+          }
+          return to;
+        };
+        var __toCommonJS = function(mod) {
+          return __copyProps(__defProp({}, '__esModule', { value: true }), mod);
+        };
+        """
+        context.evaluateScript(shimScript)
+        context.evaluateScript(jsSource)
+
+        guard context.exception == nil else { return nil }
+
+        // 取 module.exports 的 default 属性（或直接 module.exports）
+        let exportsVal = context.evaluateScript("JSON.stringify(module.exports.default || module.exports)")
+        guard let jsonStr = exportsVal?.toString(), !jsonStr.isEmpty, jsonStr != "undefined" else {
+            return nil
+        }
+        guard let data = jsonStr.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return obj
+    }
+
+    /// 用正则提取 JS 中 `var xxx_default = { ... }` 块并转 JSON
+    private func extractViaRegex(_ jsSource: String) -> [String: Any]? {
+        // 找到默认变量赋值的起始位置
+        let marker = "_default = "
+        guard let markerRange = jsSource.range(of: marker) else { return nil }
+        let objStart = jsSource.index(markerRange.upperBound, offsetBy: 0)
+        guard jsSource[objStart] == "{" else { return nil }
+
+        // 括号匹配提取完整 JS 对象文字量
+        var depth = 0
+        var objEnd = objStart
+        for idx in jsSource.indices[objStart...] {
+            let ch = jsSource[idx]
+            if ch == "{" { depth += 1 }
+            else if ch == "}" {
+                depth -= 1
+                if depth == 0 { objEnd = idx; break }
+            }
+        }
+        guard depth == 0 else { return nil }
+
+        let jsObj = String(jsSource[objStart...objEnd])
+
+        // 将 JS 对象键（未加引号）转换为合法 JSON 键
+        guard let keyQuoted = quoteJSObjectKeys(jsObj),
+              let data = keyQuoted.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return obj
+    }
+
+    /// 将 JS 对象文字量中未加引号的键名加上双引号，使其成为合法 JSON
+    private func quoteJSObjectKeys(_ js: String) -> String? {
+        // 匹配 {, 或换行后的 标识符键: 形式（不含字符串值中的冒号）
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?<=[{,\n\r])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:"#,
+            options: []
+        ) else { return nil }
+
+        var result = js
+        var offset = 0
+        let nsStr = js as NSString
+        let matches = regex.matches(in: js, range: NSRange(js.startIndex..., in: js))
+
+        for match in matches {
+            guard match.numberOfRanges >= 2,
+                  let keyRange = Range(match.range(at: 1), in: result) else { continue }
+
+            let key = String(result[keyRange])
+            // 跳过已是合法值的内容（避免误替换）
+            let replacement = "\"\(key)\""
+            let shiftedStart = result.index(keyRange.lowerBound, offsetBy: 0)
+            result.replaceSubrange(keyRange, with: replacement)
+            // 每次替换后偏移量自动跟踪（直接在原 result 上操作，range 已失效，需重新计算）
+            _ = offset // suppress warning; offset unused because we work on `result` directly
+        }
+
+        // 由于直接替换导致后续 range 失效，改用 NSRegularExpression replacementString 方式重做
+        let template = #"$0"#
+        let fullRange = NSRange(js.startIndex..., in: js)
+        // 用单次 replacingMatches 替换所有匹配
+        guard let regex2 = try? NSRegularExpression(
+            pattern: #"(?<=[{,\n\r])\s*([A-Za-z_][A-Za-z0-9_]*)(\s*):"#,
+            options: []
+        ) else { return nil }
+
+        let quoted = regex2.stringByReplacingMatches(
+            in: js,
+            range: fullRange,
+            withTemplate: #" "$1"$2:"#
+        )
+        return quoted
     }
     
     /// 构建 CatPawOpen 服务的配置 URL
@@ -170,78 +312,66 @@ class CatPawProtocolHandler {
     }
     
     /// 解析 CatPawOpen 配置数据
-    /// 配置包含 video/read/comic/music/pan 等多个分类
+    /// 兼容两种格式：
+    ///   - 旧格式：json["video"]["sites"] → [[key, name, api, type, ...]]
+    ///   - 新格式：json["sites"]["list"] → [[key, name, api, type, ...]]
     private func parseCatPawOpenConfig(_ json: [String: Any], originalUrl: String) throws -> ProcessedSource {
         var allVideos: [CatPawVideo] = []
-        
-        // 优先解析 video 分类
-        if let videoConfig = json["video"] as? [String: Any],
-           let sites = videoConfig["sites"] as? [[String: Any]] {
-            
-            // 从 sites 中提取站点信息并转换为视频对象
-            for site in sites {
-                let siteKey = site["key"] as? String ?? ""
-                let siteName = site["name"] as? String ?? ""
-                let siteApi = site["api"] as? String ?? ""
-                
-                var video = CatPawVideo()
-                video.id = siteKey
-                video.name = siteName
-                video.pic = site["pic"] as? String ?? ""
-                video.note = siteName  // 站点名称作为备注
-                
-                // 附加字段
-                if let siteUrl = site["url"] as? String {
-                    video.des = siteUrl
-                }
-                if let siteType = site["type"] as? Int {
-                    video.des = video.des ?? ""
-                }
-                if let siteApi = siteApi as String? {
-                    video.actor = siteApi
-                }
-                
-                if !video.id.isEmpty && !video.name.isEmpty {
-                    allVideos.append(video)
-                }
+
+        // --- 新格式：sites.list ---
+        if let sitesDict = json["sites"] as? [String: Any],
+           let list = sitesDict["list"] as? [[String: Any]], !list.isEmpty {
+            for site in list {
+                if let video = parseSiteToVideo(site) { allVideos.append(video) }
             }
         }
-        
-        // 如果 video 为空，尝试其他分类
+
+        // --- 旧格式：video.sites ---
+        if allVideos.isEmpty,
+           let videoConfig = json["video"] as? [String: Any],
+           let sites = videoConfig["sites"] as? [[String: Any]] {
+            for site in sites {
+                if let video = parseSiteToVideo(site) { allVideos.append(video) }
+            }
+        }
+
+        // --- 兜底：遍历所有顶层字典键中的 sites / list 数组 ---
         if allVideos.isEmpty {
-            for (categoryKey, categoryValue) in json {
-                if let categoryDict = categoryValue as? [String: Any],
-                   let sites = categoryDict["sites"] as? [[String: Any]] {
-                    
+            for (_, categoryValue) in json {
+                if let categoryDict = categoryValue as? [String: Any] {
+                    let sites = (categoryDict["sites"] as? [[String: Any]])
+                             ?? (categoryDict["list"] as? [[String: Any]])
+                             ?? []
                     for site in sites {
-                        let siteKey = site["key"] as? String ?? ""
-                        let siteName = site["name"] as? String ?? ""
-                        
-                        var video = CatPawVideo()
-                        video.id = siteKey
-                        video.name = siteName
-                        video.pic = site["pic"] as? String ?? ""
-                        video.note = siteName
-                        
-                        if !video.id.isEmpty && !video.name.isEmpty {
-                            allVideos.append(video)
-                        }
+                        if let video = parseSiteToVideo(site) { allVideos.append(video) }
                     }
                 }
             }
         }
-        
-        // 将所有站点转换为分类
-        let categories = allVideos.map { video in
-            SourceCategory(id: video.id, name: video.name)
-        }
-        
+
+        let categories = allVideos.map { SourceCategory(id: $0.id, name: $0.name) }
         return ProcessedSource(
             sourceUrl: originalUrl,
             categories: categories,
             videos: allVideos,
             metadata: ["type": "catpawopen"]
         )
+    }
+
+    /// 将站点字典转换为 CatPawVideo
+    private func parseSiteToVideo(_ site: [String: Any]) -> CatPawVideo? {
+        let siteKey = site["key"] as? String ?? ""
+        let siteName = site["name"] as? String ?? ""
+        guard !siteKey.isEmpty && !siteName.isEmpty else { return nil }
+
+        var video = CatPawVideo()
+        video.id = siteKey
+        video.name = siteName
+        video.pic = site["pic"] as? String ?? ""
+        video.note = siteName
+        if let siteUrl = site["url"] as? String { video.des = siteUrl }
+        if let siteApi = site["api"] as? String { video.actor = siteApi }
+        return video
     }
     
     // MARK: - 标准源处理逻辑
